@@ -16,11 +16,11 @@ canvas& canvas::instance()
     return inst;
 }
 
-bool canvas::init(const config& cfg)
+types::status canvas::init(const config& cfg)
 {
     cfg_ = cfg;
     initialized_ = true;
-    return true;
+    return types::status::ok;
 }
 
 canvas::tx_frame_header* canvas::frame_header()
@@ -32,11 +32,6 @@ canvas::official_ui_object* canvas::buffer_nth_object(uint8_t index)
 {
     return reinterpret_cast<official_ui_object*>(tx_buffer_ + sizeof(tx_frame_header) +
                                                  index * sizeof(official_ui_object));
-}
-
-char* canvas::buffer_string()
-{
-    return reinterpret_cast<char*>(tx_buffer_ + sizeof(tx_frame_header) + sizeof(official_ui_object));
 }
 
 bool canvas::valid_object_id(int id)
@@ -547,7 +542,8 @@ void canvas::transmit_string_object(uint8_t index, operation op)
     std::memcpy(meta->name, obj.referee_handle, 3);
     meta->dword1.detail_dword1_internal.operation = static_cast<uint32_t>(op);
 
-    char* str_buf = buffer_string();
+    char* str_buf = reinterpret_cast<char*>(tx_buffer_ + sizeof(tx_frame_header) +
+                                            sizeof(official_ui_object));
     std::fill(str_buf, str_buf + string_max_length, 0);
     std::strncpy(str_buf, obj.detail_dword3.str_val,
                  std::min(static_cast<uint8_t>(obj.detail_dword1.detail_b), string_max_length));

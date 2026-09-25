@@ -1,100 +1,28 @@
-# PENIX
+# Penix
 
-工程以 STM32CubeMX 生成的 HAL/ThreadX/USBX 工程为硬件基础，在其上提供配置驱动的 BSP、设备抽象、可复用业务模块、通用库和板端 demo。
+Penix 是 STM32 + ThreadX 的嵌入式机器人架构。本仓库保留可构建的板级工程、配置生成器、BSP、设备、功能模块、通用库和应用入口；不包含诊断示例。
 
-统一构建入口通过 `configs/config.json` 的 `board` 字段选择板卡。支持
-`stm32h723` 和 `stm32f407`；切换板卡只需修改该字段，然后使用全新的构建目录重新
-configure/build。
+## 目录与职责
 
-当前工程目标不是把所有能力封装成厚重平台，而是让硬件绑定、设备实例和服务线程尽量由配置描述，并由 CMake 在配置阶段生成只读头文件；业务代码只依赖稳定接口和生成出的绑定常量。
+- `boards/`：IOC、CubeMX 生成代码、链接脚本与固定硬件资源。
+- `configs/`：板型参数、设备组合、默认值与配置生成器。
+- `bsp/`：外设接口和板族实现；`devices/`：设备驱动。
+- `modules/`：AHRS、遥控器、裁判系统等功能；`libs/`：通用库。
+- `app/app.cpp`：机器人应用启动入口。按项目需要在 `app_start()` 初始化服务和控制任务。
 
-## 目录结构
+## 配置与构建
 
-| 目录 | 职责 |
-| --- | --- |
-| `boards/stm32h723/` | STM32CubeMX/HAL/ThreadX/USBX 生成工程、启动文件、链接脚本和工具链文件。 |
-| `configs/` | `config.json`、IOC 解析及 `config.hpp`/`robot_config.hpp` 生成逻辑。 |
-| `bsp/stm32h723/` | CAN、USART、SPI、PWM、DWT、EXTI、Flash、USB 等板级外设封装。 |
-| `devices/` | 电机、IMU、LED、UI 等基于 BSP 的具体设备与统一接口。 |
-| `modules/` | AHRS、遥控器、裁判系统等可持续运行的服务线程。 |
-| `libs/` | 状态码、消息、CRC、控制、滤波、数学和运行时监控等通用能力。 |
-| `demo/` | 板端联调入口、具体 demo 和主机侧验证脚本。 |
-| `cmsis-dsp/` | 随工程纳入的 CMSIS-DSP 子集，供 AHRS/EKF 等算法使用。 |
-
-## 分层关系
-
-```mermaid
-flowchart TD
-    Config["configs/config.json + selected board.ioc"] --> Generated["build/generated<br/>config.hpp + robot_config.hpp"]
-    Board["board<br/>HAL + ThreadX + USBX"]
-    BSP["bsp<br/>peripheral wrappers"]
-    Libs["libs<br/>status + msg + math + monitor"]
-    Devices["devices<br/>motor + imu + led + ui"]
-    Modules["modules<br/>ahrs + remoter + referee"]
-    Demo["demo/app.cpp<br/>application entry"]
-
-    Generated --> BSP
-    Generated --> Devices
-    Generated --> Modules
-    Generated --> Demo
-    Board --> BSP
-    Libs --> BSP
-    Libs --> Devices
-    Libs --> Modules
-    BSP --> Devices
-    Devices --> Modules
-    Modules --> Demo
-```
-
-依赖方向保持单向：上层不直接操作 HAL 句柄，硬件资源通过 `bsp` 暴露；设备层统一相似硬件能力；模块层负责服务线程和消息发布；`demo/app.cpp` 是当前应用装配入口。
-
-## 构建
-
-在 `embedded_framework/` 目录内，推荐使用工程自带 preset 或显式指定 ARM 工具链：
+需要 Arm GNU Toolchain、CMake 和 Ninja。编辑 `configs/boards/<board>/params.json` 与 `robot.json`，然后重新 Configure 和 Build。IOC 决定引脚、时钟、DMA 和外设初始化；`board.json` 描述固定板级资源。不要编辑 `build/` 中的生成文件。
 
 ```powershell
-cmake --preset Debug
-cmake --build --preset Debug
+cmake --preset h723-debug
+cmake --build --preset h723-debug
 ```
 
-选择 F407 时，将 `configs/config.json` 中的 `board` 改为 `stm32f407`，再使用新的
-构建目录执行同样的命令。不要在同一个构建目录中直接复用另一块板卡的缓存。
+F407 选择对应的 `f407-debug` preset 和 F4 BSP。`PNX_BOARD` 不会自动切换 BSP 代码；需要另一份 BSP 工作树时，设置 `PNX_BSP_SOURCE_DIR`。构建产物位于 `build/<preset>/pnx_embedded.elf`。
 
-也可以指定独立构建目录：
+PnX Config Editor 可用于编辑 JSON 和执行 Configure；Cortex Kit 使用调试配置中的芯片名及 ELF 路径。切板或切换构建类型后需核对这两项。硬件烧录和运行由操作者显式执行。
 
-```powershell
-cmake -S embedded_framework -B .agents\build\embedded_framework_arm -G Ninja -DCMAKE_TOOLCHAIN_FILE=boards/stm32h723/cmake/gcc-arm-none-eabi.cmake
-cmake --build .agents\build\embedded_framework_arm
-```
+## 实现约束
 
-构建配置阶段会读取：
-
-- `configs/config.json`
-- `boards/<board>/board.ioc`
-- `configs/cmake/generate_config.cmake`
-
-并生成：
-
-- `<build-dir>/generated/config.hpp`
-- `<build-dir>/generated/robot_config.hpp`
-
-生成文件由 CMake 管理，业务修改应回到 JSON 或 IOC，而不是手动修改 `generated` 目录。
-
-## 入口
-
-ThreadX 初始化阶段会在 `boards/stm32h723/Core/Src/app_threadx.c` 中调用：
-
-```cpp
-extern "C" void app_start();
-```
-
-当前实现位于 `demo/app.cpp`，通过打开对应的 `demo::<name>::run()` 或 `demo::<name>::start()` 选择板端联调入口。后续正式机器人应用也应从这里完成服务初始化和设备装配。
-
-## 开发约定
-
-- 优先扩展现有层次：配置放 `configs`，外设封装放 `bsp`，硬件对象放 `devices`，持续运行的通用服务放 `modules`，纯工具能力放 `libs`。
-- 新增抽象必须承担真实职责，例如协议隔离、类型安全、并发边界或复用；不要新增只转发一次的薄封装。
-- BSP 公共接口优先返回 `types::status`，并避免让 HAL 状态、句柄和中断细节泄漏给上层。
-- 通信接收优先使用注册回调、信号量或 `msg` topic，不在模块内部私有化输出通道。
-- 板端调试优先暴露 telemetry/debug state，demo 中避免依赖 `printf`。
-- 修改 `params.json`、`robot.json` 或 `board.ioc` 后重新 configure/build，确保生成头文件同步。
+函数应承担明确的校验、状态变更、资源所有权、协议转换或复用职责。仅被调用一次、只检查参数后继续转调的内部函数，应优先合并到调用处。保留 ThreadX/HAL 要求的回调入口和有设备语义的公开操作；删除公开接口前核对所有调用方和两种板型的契约。

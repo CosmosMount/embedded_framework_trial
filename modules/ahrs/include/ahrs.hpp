@@ -1,39 +1,35 @@
 #pragma once
 
-#include "bmi088.hpp"
 #include "config.hpp"
+#if HAS_AHRS
+#include "bmi088.hpp"
+#include "quaternion_ekf.hpp"
+#include "tactical_ekf.hpp"
+#endif
 #if HAS_DMIMU
 #include "dmimu.hpp"
 #endif
+#include "imu.hpp"
 #include "msg.hpp"
-#include "quaternion_ekf.hpp"
 #include "runtime_monitor.hpp"
-#include "tactical_ekf.hpp"
 #include "tx_api.h"
+#include <type_traits>
 
 namespace ahrs
 {
 
+#if HAS_AHRS
 struct config
 {
-    float imu_offset_x = 0.0f;
-    uint32_t imu_thread_priority = 3;
-    uint32_t temp_thread_priority = 4;
-    float target_temp = 45.0f;
+    // Robot defaults come from params; callers may still override individual
+    // fields before passing this configuration to service::init().
+    float imu_offset_x = params::ahrs::imu_offset_x;
+    uint32_t imu_thread_priority = params::ahrs::imu_thread_priority;
+    uint32_t temp_thread_priority = params::ahrs::temp_thread_priority;
+    float target_temp = params::ahrs::target_temp;
+    // Post-update sleep gives lower-priority threads CPU time under sustained DRDY load.
+    uint32_t loop_sleep_ticks = params::ahrs::loop_sleep_ticks;
     bool temperature_control_enabled = true;
-};
-
-struct message
-{
-    float quaternion[4] = {1.0f, 0.0f, 0.0f, 0.0f};
-    float yaw = 0.0f;
-    float pitch = 0.0f;
-    float roll = 0.0f;
-    float total_yaw = 0.0f;
-    float gyro_r = 0.0f;
-    float gyro_p = 0.0f;
-    float gyro_y = 0.0f;
-    float accel[3] = {};
 };
 
 struct telemetry
@@ -76,27 +72,9 @@ struct telemetry
 };
 
 extern "C" telemetry ahrs_debug_telemetry;
+#endif
 
 #if HAS_DMIMU
-// DMIMU uses a distinct payload type so its direct device attitude and the
-// BMI088 local-fusion result remain independent topics even when both services
-// run at the same time.
-struct dmimu_message
-{
-    float quaternion[4] = {};
-    float yaw = 0.0f;       // rad
-    float pitch = 0.0f;     // rad
-    float roll = 0.0f;      // rad
-    float total_yaw = 0.0f; // rad; DMIMU does not provide a multi-turn yaw value.
-    float gyro_r = 0.0f;    // rad/s
-    float gyro_p = 0.0f;    // rad/s
-    float gyro_y = 0.0f;    // rad/s
-    float accel[3] = {};     // m/s^2
-    uint32_t sequence = 0U;
-    ULONG received_tick = 0U;
-    bool online = false;
-};
-
 struct dmimu_service_config
 {
     uint32_t thread_priority = 3U;
@@ -129,22 +107,25 @@ struct dmimu_telemetry
 extern "C" dmimu_telemetry dmimu_debug_telemetry;
 #endif
 
+#if HAS_AHRS
 class service
 {
 public:
     static service& instance();
 
-    bool init(const config& cfg = {});
+    types::status init(const config& cfg = {});
     TX_SEMAPHORE* heartbeat_sem() { return &heartbeat_sem_; }
     imu::bmi088& imu() { return imu_; }
+    msg::channel<imu::state>& output() noexcept { return output_; }
     const telemetry& diagnostics() const { return telemetry_; }
 
 private:
     static void imu_thread_entry(ULONG arg);
-    static void gyro_data_ready_callback(void* user);
+    void gyro_data_ready_callback();
     bool create_resources();
     void wait_for_gyro_data_ready();
-    void fill_msg(message& msg, const quaternion_ekf& ekf, const imu::reading& reading);
+    void fill_state(imu::state& output,
+                    const imu::reading& reading);
 
     config cfg_{};
     imu::bmi088 imu_{};
@@ -153,17 +134,17 @@ private:
     TX_SEMAPHORE heartbeat_sem_{};
     TX_SEMAPHORE gyro_data_ready_sem_{};
 
-    // The IMU thread owns both the production quaternion EKF and the shadow
-    // Tactical ESKF.  Their covariance workspaces are intentionally local to
-    // this thread, so reserve enough DTCM stack for their peak update frames.
+    // Keep the established stack budget for either selected solver's update frames.
     alignas(8) uint8_t imu_stack_[8192]{};
 
-    msg::topic* ahrs_topic_ = nullptr;
+    msg::channel<imu::state> output_{};
     telemetry& telemetry_ = ahrs_debug_telemetry;
-    tactical::ekf tactical_ekf_{};
+    std::conditional_t<params::ahrs::use_tactical, tactical::ekf, quaternion_ekf> solver_{};
     runtime::monitor imu_loop_monitor_{500U};
     bool initialized_ = false;
 };
+
+#endif
 
 #if HAS_DMIMU
 class dmimu_service
@@ -173,10 +154,11 @@ public:
 
     // Calling init is the enable switch for this service. The later robot
     // configuration layer must omit this call when DMIMU is not configured.
-    bool init(const imu::dmimu::config& dmimu_cfg,
-              const dmimu_service_config& service_cfg = {});
+    types::status init(const imu::dmimu::config& dmimu_cfg,
+                       const dmimu_service_config& service_cfg = {});
     TX_SEMAPHORE* heartbeat_sem() { return &heartbeat_sem_; }
     imu::dmimu& dmimu() { return dmimu_; }
+    msg::channel<imu::state>& output() noexcept { return output_; }
     const dmimu_telemetry& diagnostics() const { return telemetry_; }
 
 private:
@@ -195,7 +177,7 @@ private:
     TX_SEMAPHORE heartbeat_sem_{};
     alignas(8) uint8_t stack_[2048]{};
 
-    msg::topic* topic_ = nullptr;
+    msg::channel<imu::state> output_{};
     dmimu_telemetry& telemetry_ = dmimu_debug_telemetry;
     runtime::monitor loop_monitor_{1000U};
     bool initialized_ = false;

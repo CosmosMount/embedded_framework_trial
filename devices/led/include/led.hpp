@@ -2,6 +2,9 @@
 
 #include <cstdint>
 
+// Currently supports only the H7 SPI-driven WS2812 LED.
+// F4 GPIO indicator LEDs are not supported by this device; use bsp::gpio directly.
+// This implementation is linked only when robot.devices.led is selected.
 namespace led
 {
 

@@ -20,29 +20,42 @@ lkmotorhandler::lkmotorhandler()
     }
 }
 
-bool lkmotorhandler::register_motor(motor* motor)
+bool lkmotorhandler::register_motor(motor& device) noexcept
 {
-    auto* lk = static_cast<lkmotor*>(motor);
-    if (lk == nullptr || lk->can_id() < 0x141 || lk->can_id() > 0x144)
+    if (device.get_protocol() != protocol::lk)
+    {
+        return false;
+    }
+    auto& lk = static_cast<lkmotor&>(device);
+    if (!lk.protocol_valid() || lk.can_id() < 0x141 || lk.can_id() > 0x144)
     {
         return false;
     }
 
-    if (!ensure_bus(lk->can_bus(), lk->can_type(), rx_entry, this))
+    if (!ensure_bus(lk.can_bus()))
     {
         return false;
     }
 
-    const uint8_t bus = bus_index(lk->can_bus());
-    const uint8_t slot = static_cast<uint8_t>(lk->can_id() - 0x141);
-    motor_list_[bus][slot] = lk;
+    const uint8_t bus = bus_index(lk.can_bus());
+    const uint8_t slot = static_cast<uint8_t>(lk.can_id() - 0x141);
+    if (motor_list_[bus][slot] && motor_list_[bus][slot] != &lk) return false;
+    motor_list_[bus][slot] = &lk;
 
-    track(lk);
     return true;
 }
 
-void lkmotorhandler::send_control()
+types::status lkmotorhandler::stop() noexcept
 {
+    for (auto& row : motor_list_)
+        for (auto* device : row)
+            if (device) device->relax();
+    return send_control();
+}
+
+types::status lkmotorhandler::send_control() noexcept
+{
+    auto result = types::status::ok;
     for (uint8_t bus = 0; bus < bsp::can::bus_count; ++bus)
     {
         std::memset(send_data_[bus], 0, sizeof(send_data_[bus]));
@@ -56,8 +69,18 @@ void lkmotorhandler::send_control()
                 continue;
             }
 
-            has_motor = true;
             m->set_output();
+            if (!m->broadcast())
+            {
+                const uint16_t value = static_cast<uint16_t>(m->cmd.current);
+                uint8_t data[8]{};
+                data[0] = 0xa1; // relax requests zero torque current, not driver shutdown.
+                data[4] = static_cast<uint8_t>(value);
+                data[5] = static_cast<uint8_t>(value >> 8);
+                retain_first_error(result, bsp::can::transmit(static_cast<bsp::can::bus>(bus), m->can_id(), data, 8));
+                continue;
+            }
+            has_motor = true;
 
             if (m->can_id() >= 0x141 && m->can_id() <= 0x144)
             {
@@ -70,9 +93,10 @@ void lkmotorhandler::send_control()
 
         if (has_motor)
         {
-            bsp::can::transmit(static_cast<bsp::can::bus>(bus), lk_control_id, send_data_[bus], 8);
+            retain_first_error(result, bsp::can::transmit(static_cast<bsp::can::bus>(bus), lk_control_id, send_data_[bus], 8));
         }
     }
+    return result;
 }
 
 void lkmotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame)
@@ -93,15 +117,6 @@ void lkmotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& fr
     {
         m->parse_feedback(frame.data, frame.len);
     }
-}
-
-void lkmotorhandler::rx_entry(bsp::can::bus bus, const bsp::can::rx_frame& frame, void* user_data)
-{
-    if (user_data == nullptr)
-    {
-        return;
-    }
-    static_cast<lkmotorhandler*>(user_data)->dispatch_rx(bus, frame);
 }
 
 } // namespace motors

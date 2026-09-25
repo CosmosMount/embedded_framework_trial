@@ -9,9 +9,8 @@ namespace led
 namespace
 {
 
-#if HAS_LED
 
-constexpr bsp::spi::bus ws2812_bus = bsp::spi::bus::spi6;
+constexpr bsp::spi::bus ws2812_bus = board::device::led::spi;
 constexpr uint8_t ws2812_low = 0xC0;
 constexpr uint8_t ws2812_high = 0xF0;
 constexpr uint32_t spi_timeout_ms = 1000;
@@ -50,34 +49,26 @@ bool set_rgb(uint8_t r, uint8_t g, uint8_t b)
     return true;
 }
 
-#endif
 
 } // namespace
 
 void init()
 {
-#if HAS_LED
     all_on();
-#endif
 }
 
 void all_on()
 {
-#if HAS_LED
     (void)set_rgb(7, 7, 7);
-#endif
 }
 
 void all_off()
 {
-#if HAS_LED
     (void)set_rgb(0, 0, 0);
-#endif
 }
 
 void on(color c)
 {
-#if HAS_LED
     switch (c)
     {
     case color::red:
@@ -93,7 +84,6 @@ void on(color c)
         (void)set_rgb(7, 7, 7);
         break;
     }
-#endif
 }
 
 void toggle(color c)

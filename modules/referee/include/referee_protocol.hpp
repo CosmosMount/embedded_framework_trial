@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
 
 /* 通信协议内容: 常规链路由裁判系统服务器和主控模块进行数据转发，从电源管理模块的User串口收发数据 */
 
@@ -393,29 +394,45 @@ enum RefereeID
     CustomClient2Robot = 0x0311,      // 自定义客户端发送给机器人，频率上限75Hz
 };
 
-struct RefereeRingBuffer 
+struct RefereeRingBuffer
 {
-    uint8_t _buffer[256] = {0};
-    volatile uint16_t head = 0; // 写入位置
-    volatile uint16_t tail = 0; // 读取位置
-    
-    void push(const uint8_t* data, uint16_t len) 
+    // One ISR producer and one thread consumer. Full buffers drop NEW bytes;
+    // already accepted stream bytes retain their order. No allocation or wait.
+    static constexpr uint32_t capacity = 256U;
+    static_assert(std::atomic<uint32_t>::is_always_lock_free);
+
+    void push(const uint8_t* data, uint16_t len)
     {
-        for(uint16_t i=0; i<len; i++) 
+        if (data == nullptr) return;
+        for (uint16_t i = 0; i < len; ++i)
         {
-            _buffer[head] = data[i];
-            head = (head + 1) % 256;
+            const auto write = head_.load(std::memory_order_relaxed);
+            if (write - tail_.load(std::memory_order_acquire) == capacity)
+            {
+                dropped_.fetch_add(1U, std::memory_order_relaxed);
+                continue;
+            }
+            buffer_[write % capacity] = data[i];
+            head_.store(write + 1U, std::memory_order_release);
         }
     }
-    
-    bool pop(uint8_t& byte) 
+
+    bool pop(uint8_t& byte)
     {
-        if(head == tail) 
-            return false;
-        byte = _buffer[tail];
-        tail = (tail + 1) % 256;
+        const auto read = tail_.load(std::memory_order_relaxed);
+        if (read == head_.load(std::memory_order_acquire)) return false;
+        byte = buffer_[read % capacity];
+        tail_.store(read + 1U, std::memory_order_release);
         return true;
     }
+
+    uint32_t dropped_bytes() const { return dropped_.load(std::memory_order_relaxed); }
+
+private:
+    uint8_t buffer_[capacity]{};
+    std::atomic<uint32_t> head_{0};
+    std::atomic<uint32_t> tail_{0};
+    std::atomic<uint32_t> dropped_{0};
 };
 
 enum UnpackState

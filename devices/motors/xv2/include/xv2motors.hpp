@@ -25,23 +25,24 @@ public:
 
     explicit xv2motor(config cfg, options opts = options{});
 
-    void set_output() override;
+    types::status set_output() override;
     void parse_feedback(const uint8_t* data, uint8_t len) override;
-    capabilities get_capabilities() const override { return {true, true, false, true, true}; }
+    protocol get_protocol() const noexcept final { return protocol::xv2; }
+    capabilities get_capabilities() const override { return {true, has_torque_calibration(), false, true, true}; }
 
-    void enable(bool sync = false);
-    void disable(bool sync = false);
-    void stop_now(bool sync = false);
-    void reset_position();
-    void trigger_encoder_calibration();
-    void reset_clog_protection();
-    void request_feedback(xv2::sys_param param);
+    types::status enable(bool sync = false);
+    types::status disable(bool sync = false);
+    types::status stop_now(bool sync = false);
+    types::status reset_position();
+    types::status trigger_encoder_calibration();
+    types::status reset_clog_protection();
+    types::status request_feedback(xv2::sys_param param);
 
     uint8_t address() const { return options_.address; }
     uint32_t tx_id() const { return options_.tx_id; }
 
 private:
-    void transmit(const xv2::frame& frame);
+    types::status transmit(const xv2::frame& frame);
     static float rad_to_deg(float rad);
     static float rad_s_to_rpm(float rad_s);
 

@@ -1,11 +1,11 @@
 #include "bmi088.hpp"
 
-#include "bsp_exti.h"
+#include "bsp_exti.hpp"
+#include "bsp_gpio.hpp"
 #include "bsp_pwm.hpp"
 #include "bsp_spi.hpp"
 #include "constrain.hpp"
 #include "config.hpp"
-#include "main.h"
 #include "tx_api.h"
 
 #include <cmath>
@@ -17,17 +17,10 @@ namespace imu
 namespace
 {
 
-constexpr bsp::spi::bus imu_spi = bsp::spi::bus::spi2;
-
-#if HAS_PWM_TIM3_CH4
-constexpr bsp::pwm::channel imu_heater_pwm = bsp::pwm::channel::tim3_ch4;
-#elif HAS_PWM_TIM12_CH2
-constexpr bsp::pwm::channel imu_heater_pwm = bsp::pwm::channel::tim12_ch2;
-#endif
-
-bsp::spi::cs to_spi_cs(bmi088::cs target)
+constexpr bsp::gpio::output to_chip_select(bmi088::cs target)
 {
-    return target == bmi088::cs::acc ? bsp::spi::cs::bmi088_acc : bsp::spi::cs::bmi088_gyro;
+    return target == bmi088::cs::acc ? board::device::bmi088::acc_cs
+                                     : board::device::bmi088::gyro_cs;
 }
 
 } // namespace
@@ -74,19 +67,22 @@ bool bmi088::write_reg(cs target, uint8_t addr, const uint8_t* data, uint8_t len
         return false;
     }
 
-    bsp::spi::cs_set(to_spi_cs(target), true);
+    (void)bsp::gpio::set_active(to_chip_select(target), true);
     uint8_t tx_addr = static_cast<uint8_t>(addr & spi_write);
-    const bool address_ok = bsp::spi::transmit(imu_spi, &tx_addr, 1, 1000) == types::status::ok;
+    const bool address_ok =
+        bsp::spi::transmit(board::device::bmi088::spi, &tx_addr, 1, params::bmi088::spi_timeout_ms) ==
+        types::status::ok;
     bool data_ok = true;
     if (address_ok && len > 0 && data != nullptr)
     {
-        data_ok = bsp::spi::transmit(imu_spi, data, len, 1000) == types::status::ok;
+        data_ok = bsp::spi::transmit(board::device::bmi088::spi, data, len, params::bmi088::spi_timeout_ms) ==
+                  types::status::ok;
     }
     if (test.init_err)
     {
         tx_thread_sleep(1);
     }
-    bsp::spi::cs_set(to_spi_cs(target), false);
+    (void)bsp::gpio::set_active(to_chip_select(target), false);
     const bool unlock_ok = unlock_spi();
     if (!address_ok || !data_ok)
     {
@@ -103,11 +99,15 @@ bool bmi088::read_reg(cs target, uint8_t addr, uint8_t* data, uint8_t len)
         return false;
     }
 
-    bsp::spi::cs_set(to_spi_cs(target), true);
+    (void)bsp::gpio::set_active(to_chip_select(target), true);
     uint8_t tx_addr = static_cast<uint8_t>(addr | spi_read);
-    const bool address_ok = bsp::spi::transmit(imu_spi, &tx_addr, 1, 1000) == types::status::ok;
-    const bool data_ok = address_ok && bsp::spi::receive(imu_spi, data, len, 1000) == types::status::ok;
-    bsp::spi::cs_set(to_spi_cs(target), false);
+    const bool address_ok =
+        bsp::spi::transmit(board::device::bmi088::spi, &tx_addr, 1, params::bmi088::spi_timeout_ms) ==
+        types::status::ok;
+    const bool data_ok =
+        address_ok && bsp::spi::receive(board::device::bmi088::spi, data, len, params::bmi088::spi_timeout_ms) ==
+                          types::status::ok;
+    (void)bsp::gpio::set_active(to_chip_select(target), false);
     const bool unlock_ok = unlock_spi();
     if (!address_ok || !data_ok)
     {
@@ -225,8 +225,13 @@ void bmi088::temperature_control(float target)
 
 void bmi088::set_heater_duty(float ratio)
 {
-#if HAS_PWM_TIM3_CH4 || HAS_PWM_TIM12_CH2
-    bsp::pwm::set_duty(imu_heater_pwm, ratio);
+#if HAS_BMI088_HEATER
+    if (bsp::pwm::set_duty(board::device::bmi088::heater, ratio) != types::status::ok)
+    {
+        test.temp_ctrl_err = true;
+        temperature_ready_ = false;
+        update_status_from_selftest();
+    }
 #else
     (void)ratio;
 #endif
@@ -257,19 +262,39 @@ bool bmi088::start_temperature_control(const temp_control_config& cfg)
     return true;
 }
 
-void bmi088::set_gyro_data_ready_callback(data_ready_callback callback, void* user)
+bool bmi088::shutdown()
 {
-    gyro_data_ready_callback_ = callback;
-    gyro_data_ready_user_ = user;
-    bsp_exti_attach(GYRO_INT_Pin, gyro_data_ready_entry, this);
+    if (temp_thread_started_)
+    {
+        if (tx_thread_terminate(&temp_thread_) != TX_SUCCESS ||
+            tx_thread_delete(&temp_thread_) != TX_SUCCESS)
+        {
+            return false;
+        }
+        temp_thread_started_ = false;
+        set_heater_duty(0.0f);
+        temperature_ready_ = false;
+    }
+    if (spi_mutex_ready_)
+    {
+        if (tx_mutex_delete(&spi_mutex_) != TX_SUCCESS) return false;
+        spi_mutex_ready_ = false;
+    }
+    return true;
 }
 
-void bmi088::gyro_data_ready_entry(void* user)
+void bmi088::set_gyro_data_ready_callback(data_ready_callback callback)
 {
-    auto* self = static_cast<bmi088*>(user);
-    if (self != nullptr && self->gyro_data_ready_callback_ != nullptr)
+    gyro_data_ready_callback_ = callback;
+    bsp::exti::attach(board::device::bmi088::gyro_drdy,
+                      bsp::exti::interrupt_callback::bind<bmi088, &bmi088::gyro_data_ready_entry>(this));
+}
+
+void bmi088::gyro_data_ready_entry()
+{
+    if (gyro_data_ready_callback_)
     {
-        self->gyro_data_ready_callback_(self->gyro_data_ready_user_);
+        gyro_data_ready_callback_();
     }
 }
 
@@ -285,9 +310,9 @@ void bmi088::temp_thread_entry(ULONG arg)
     {
         self->test.temp_ctrl_err = false;
         self->update_status_from_selftest();
-#if HAS_PWM_TIM3_CH4 || HAS_PWM_TIM12_CH2
-        bsp::pwm::set_duty(imu_heater_pwm, 0.0f);
-        bsp::pwm::stop(imu_heater_pwm);
+#if HAS_BMI088_HEATER
+        bsp::pwm::set_duty(board::device::bmi088::heater, 0.0f);
+        bsp::pwm::stop(board::device::bmi088::heater);
 #endif
         for (;;)
         {
@@ -314,14 +339,20 @@ void bmi088::temp_thread_entry(ULONG arg)
         static_cast<uint8_t>(control::pid_mode::integral_limit) |
         static_cast<uint8_t>(control::pid_mode::changing_integral_rate) |
         static_cast<uint8_t>(control::pid_mode::derivative_on_measurement));
-    pid.tune(300.0f, 0.06f, 100.0f);
-    pid.max_out = 90.0f;
-    pid.max_iout = 200.0f;
-    pid.scalar_a = 3.5f;
-    pid.scalar_b = 0.2f;
+    pid.tune(params::bmi088::pid_kp, params::bmi088::pid_ki, params::bmi088::pid_kd);
+    pid.max_out = params::bmi088::pid_max_out;
+    pid.max_iout = params::bmi088::pid_max_iout;
+    pid.scalar_a = params::bmi088::pid_scalar_a;
+    pid.scalar_b = params::bmi088::pid_scalar_b;
 
-#if HAS_PWM_TIM3_CH4 || HAS_PWM_TIM12_CH2
-    bsp::pwm::start(imu_heater_pwm);
+#if HAS_BMI088_HEATER
+    if (bsp::pwm::start(board::device::bmi088::heater) != types::status::ok)
+    {
+        self->test.temp_ctrl_err = true;
+        self->temperature_ready_ = false;
+        self->update_status_from_selftest();
+        return;
+    }
 #endif
 
     tx_thread_sleep(1000);
@@ -447,15 +478,16 @@ float bmi088::calculate_approach_duty(float temperature)
     const float ratio = math::clamp((temp_hold_enter - temperature) /
                                     (temp_hold_enter - temp_boost_enter),
                                     0.0f, 1.0f);
-    return 0.029f + (0.04f - 0.025f) * ratio;
+    return params::bmi088::approach_end_duty +
+           (params::bmi088::approach_start_duty - params::bmi088::approach_end_duty) * ratio;
 }
 
 void bmi088::verify_acc_chip_id()
 {
     uint8_t rx[2] = {0};
-    read_reg(cs::acc, acc_chip_id_addr, rx, 2);
+    const bool read_ok = read_reg(cs::acc, acc_chip_id_addr, rx, 2);
     tx_thread_sleep(1);
-    if (rx[1] != acc_chip_id_val)
+    if (!read_ok || rx[1] != acc_chip_id_val)
     {
         test.acc_chip_id_err = true;
     }
@@ -469,9 +501,9 @@ void bmi088::verify_acc_chip_id()
 void bmi088::verify_gyro_chip_id()
 {
     uint8_t rx = 0;
-    read_reg(cs::gyro, gyro_chip_id_addr, &rx, 1);
+    const bool read_ok = read_reg(cs::gyro, gyro_chip_id_addr, &rx, 1);
     tx_thread_sleep(1);
-    if (rx != gyro_chip_id_val)
+    if (!read_ok || rx != gyro_chip_id_val)
     {
         test.gyro_chip_id_err = true;
     }
@@ -484,13 +516,15 @@ void bmi088::verify_gyro_chip_id()
 
 void bmi088::verify_acc_data()
 {
-    test.acc_data_err = false;
+    accdata sample{};
+    test.acc_data_err = !read_acc(&sample);
     update_status_from_selftest();
 }
 
 void bmi088::verify_gyro_data()
 {
-    test.gyro_data_err = false;
+    gyrodata sample{};
+    test.gyro_data_err = !read_gyro(&sample);
     update_status_from_selftest();
 }
 

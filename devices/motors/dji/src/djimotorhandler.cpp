@@ -20,103 +20,75 @@ djimotorhandler::djimotorhandler()
     }
 }
 
-bool djimotorhandler::register_motor(motor* motor)
+bool djimotorhandler::register_motor(motor& device) noexcept
 {
-    auto* dji = static_cast<djimotor*>(motor);
-    if (dji == nullptr || dji->can_id() < 0x201 || dji->can_id() > 0x208)
+    if (device.get_protocol() != protocol::dji)
+    {
+        return false;
+    }
+    auto& dji = static_cast<djimotor&>(device);
+    if (!dji.valid_can_id())
     {
         return false;
     }
 
-    if (!ensure_bus(dji->can_bus(), dji->can_type(), rx_entry, this))
+    if (!ensure_bus(dji.can_bus()))
     {
         return false;
     }
 
-    const uint8_t bus = bus_index(dji->can_bus());
-    const uint8_t slot = static_cast<uint8_t>(dji->can_id() - 0x201);
-    motor_list_[bus][slot] = dji;
+    const uint8_t bus = bus_index(dji.can_bus());
+    const uint8_t slot = static_cast<uint8_t>(dji.can_id() - 0x201);
+    if (motor_list_[bus][slot] && motor_list_[bus][slot] != &dji) return false;
+    motor_list_[bus][slot] = &dji;
 
-    if (dji->can_id() <= 0x204)
-    {
-        use_low_frame_[bus] = true;
-    }
-    else
-    {
-        use_high_frame_[bus] = true;
-    }
-
-    track(dji);
     return true;
 }
 
-void djimotorhandler::send_control()
-{
-    for (uint8_t bus = 0; bus < bsp::can::bus_count; ++bus)
-    {
-        std::memset(send_data_low_[bus], 0, sizeof(send_data_low_[bus]));
-        std::memset(send_data_high_[bus], 0, sizeof(send_data_high_[bus]));
-
-        for (uint8_t i = 0; i < 8; ++i)
-        {
-            djimotor* m = motor_list_[bus][i];
-            if (m == nullptr)
-            {
-                continue;
-            }
-
-            m->set_output();
-
-            const int16_t current = m->cmd.current;
-            if (m->can_id() >= 0x201 && m->can_id() <= 0x204)
-            {
-                const int index = static_cast<int>((m->can_id() - 0x200) * 2);
-                send_data_low_[bus][index - 2] = static_cast<uint8_t>(current >> 8);
-                send_data_low_[bus][index - 1] = static_cast<uint8_t>(current);
-            }
-            if (m->can_id() >= 0x205 && m->can_id() <= 0x208)
-            {
-                const int index = static_cast<int>((m->can_id() - 0x204) * 2);
-                send_data_high_[bus][index - 2] = static_cast<uint8_t>(current >> 8);
-                send_data_high_[bus][index - 1] = static_cast<uint8_t>(current);
-            }
-        }
-
-        const auto can_bus = static_cast<bsp::can::bus>(bus);
-        if (use_low_frame_[bus])
-        {
-            bsp::can::transmit(can_bus, dji_control_id_low, send_data_low_[bus], 8);
-        }
-        if (use_high_frame_[bus])
-        {
-            bsp::can::transmit(can_bus, dji_control_id_high, send_data_high_[bus], 8);
-        }
-    }
-}
-
-void djimotorhandler::blocked_check()
+types::status djimotorhandler::stop() noexcept
 {
     for (auto& row : motor_list_)
+        for (auto* device : row)
+            if (device) device->relax();
+    return send_control();
+}
+
+types::status djimotorhandler::send_control() noexcept
+{
+    auto result = types::status::ok;
+    // GM6020 loop selection changes the command ID, not its feedback ID.
+    constexpr uint32_t ids[] = {0x200, 0x1ff, 0x2ff, 0x1fe, 0x2fe};
+    for (uint8_t bus = 0; bus < bsp::can::bus_count; ++bus)
     {
-        for (djimotor* m : row)
+        for (uint32_t id : ids)
         {
-            if (m != nullptr)
+            uint8_t data[8]{};
+            bool used = false;
+            for (djimotor* m : motor_list_[bus])
             {
-                (void)m;
+                if (!m || m->control_id() != id) continue;
+                m->set_output();
+                const uint16_t value = static_cast<uint16_t>(m->raw_output());
+                const auto index = static_cast<uint8_t>(2 * m->control_slot());
+                data[index] = static_cast<uint8_t>(value >> 8);
+                data[index + 1] = static_cast<uint8_t>(value);
+                used = true;
             }
+            if (used) retain_first_error(result, bsp::can::transmit(static_cast<bsp::can::bus>(bus), id, data, 8));
         }
     }
+    return result;
 }
 
 void djimotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame)
 {
-    if (frame.id < 0x201 || frame.id > 0x208)
+    if (frame.id < 0x201 || frame.id > 0x20b)
     {
         return;
     }
 
     const int slot = static_cast<int>(frame.id - 0x201);
-    if (slot < 0 || slot >= 8)
+    if (slot < 0 || slot >= 11)
     {
         return;
     }
@@ -126,15 +98,6 @@ void djimotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& f
     {
         m->parse_feedback(frame.data, frame.len);
     }
-}
-
-void djimotorhandler::rx_entry(bsp::can::bus bus, const bsp::can::rx_frame& frame, void* user_data)
-{
-    if (user_data == nullptr)
-    {
-        return;
-    }
-    static_cast<djimotorhandler*>(user_data)->dispatch_rx(bus, frame);
 }
 
 } // namespace motors

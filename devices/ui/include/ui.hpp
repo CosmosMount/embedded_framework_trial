@@ -60,7 +60,7 @@ class canvas
 public:
     static canvas& instance();
 
-    bool init(const config& cfg = {});
+    types::status init(const config& cfg = {});
 
     void set_sender_receiver_id(uint16_t sender_id, uint16_t receiver_id);
 
@@ -222,7 +222,6 @@ private:
 
     tx_frame_header* frame_header();
     official_ui_object* buffer_nth_object(uint8_t index);
-    char* buffer_string();
     static bool valid_object_id(int id);
 
     template <typename Callback>

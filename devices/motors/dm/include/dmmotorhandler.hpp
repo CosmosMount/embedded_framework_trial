@@ -18,28 +18,28 @@ constexpr uint32_t dm_master_id_base = robot::motors::dm::master_id_base;
 class dmmotorhandler : public motorhandler
 {
 public:
-    using motorhandler::register_motor;
-
     static dmmotorhandler& instance();
 
-    bool register_motor(motor* motor) override;
-    void send_control() override;
+    protocol supported_protocol() const noexcept override { return protocol::dm; }
+    bool register_motor(motor& device) noexcept override;
+    types::status start() noexcept override;
+    types::status stop() noexcept override;
+    types::status send_control() noexcept override;
 
-    void enable_block(dmmotor* motor);
-    void enable(dmmotor* motor);
-    void disable(dmmotor* motor);
-    void save_zero(dmmotor* motor);
-    void clear_error(dmmotor* motor);
+    types::status enable_block(dmmotor* motor);
+    types::status enable(dmmotor* motor);
+    types::status disable(dmmotor* motor);
+    types::status save_zero(dmmotor* motor);
+    types::status clear_error(dmmotor* motor);
+
+    types::status cleanup_status() const noexcept override { return cleanup_status_; }
 
 private:
     dmmotorhandler();
 
-    static void rx_entry(bsp::can::bus bus, const bsp::can::rx_frame& frame, void* user_data);
-
     void dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame) override;
 
-    uint32_t control_id(const dmmotor* motor) const;
-
+    types::status cleanup_status_ = types::status::ok;
     dmmotor* motor_list_[bsp::can::bus_count][dm_max_motors]{};
 };
 

@@ -20,61 +20,77 @@ dmmotorhandler::dmmotorhandler()
     }
 }
 
-bool dmmotorhandler::register_motor(motor* motor)
+bool dmmotorhandler::register_motor(motor& device) noexcept
 {
-    auto* dm = static_cast<dmmotor*>(motor);
-    if (dm == nullptr || dm->can_id() < dm_id_base || dm->can_id() >= dm_id_base + dm_max_motors)
+    if (device.get_protocol() != protocol::dm)
+    {
+        return false;
+    }
+    auto& dm = static_cast<dmmotor&>(device);
+    if (dm.can_id() < dm_id_base || dm.can_id() >= dm_id_base + dm_max_motors)
     {
         return false;
     }
 
-    if (!ensure_bus(dm->can_bus(), dm->can_type(), rx_entry, this))
+    if (!ensure_bus(dm.can_bus()))
     {
         return false;
     }
 
-    const uint8_t bus = bus_index(dm->can_bus());
-    const uint8_t slot = static_cast<uint8_t>(dm->can_id() - dm_id_base);
-    motor_list_[bus][slot] = dm;
+    const uint8_t bus = bus_index(dm.can_bus());
+    const uint8_t slot = static_cast<uint8_t>(dm.can_id() - dm_id_base);
+    if (motor_list_[bus][slot] && motor_list_[bus][slot] != &dm) return false;
+    motor_list_[bus][slot] = &dm;
 
-    track(dm);
     return true;
 }
 
-uint32_t dmmotorhandler::control_id(const dmmotor* motor) const
+types::status dmmotorhandler::start() noexcept
 {
-    if (motor == nullptr)
+    cleanup_status_ = types::status::ok;
+    // Validate the entire group before any enable/disable traffic.
+    if (tx_thread_identify() == nullptr) return types::status::invalid_context;
+    for (auto& row : motor_list_)
+        for (auto* device : row)
+            if (device && (device->control_mode == mode::multi || !device->supports(mode::mit) ||
+                device->enable_timeout_ticks == 0 || device->enable_timeout_ticks > 0x7fffffffU))
+                return types::status::invalid_arg;
+    dmmotor* attempted[bsp::can::bus_count * dm_max_motors]{};
+    unsigned count = 0;
+    for (auto& row : motor_list_)
     {
-        return 0;
-    }
-
-    const uint32_t frame_id = motor->can_id();
-    switch (motor->control_mode)
-    {
-        case mode::pos_speed:
-            return frame_id + 0x100;
-        case mode::speed:
-            return frame_id + 0x200;
-        case mode::multi:
-            return 0x300;
-        default:
-            return frame_id;
-    }
-}
-
-void dmmotorhandler::send_control()
-{
-    for (uint8_t bus = 0; bus < bsp::can::bus_count; ++bus)
-    {
-        for (uint8_t i = 0; i < dm_max_motors; ++i)
+        for (dmmotor* device : row)
         {
-            dmmotor* m = motor_list_[bus][i];
-            if (m != nullptr)
+            if (!device) continue;
+            // Include the failing device: a sent enable may have succeeded without feedback.
+            attempted[count++] = device;
+            const auto result = enable_block(device);
+            if (result != types::status::ok)
             {
-                m->set_output();
+                while (count) retain_first_error(cleanup_status_, disable(attempted[--count]));
+                return result;
             }
         }
     }
+    return types::status::ok;
+}
+
+types::status dmmotorhandler::stop() noexcept
+{
+    auto result = types::status::ok;
+    for (auto& row : motor_list_)
+        for (dmmotor* device : row)
+            if (device) retain_first_error(result, disable(device));
+    return result;
+}
+
+types::status dmmotorhandler::send_control() noexcept
+{
+    auto result = types::status::ok;
+    for (auto& row : motor_list_)
+        for (dmmotor* device : row)
+            if (device) retain_first_error(result, device->set_output());
+    return result;
 }
 
 void dmmotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame)
@@ -97,70 +113,59 @@ void dmmotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& fr
     }
 }
 
-void dmmotorhandler::rx_entry(bsp::can::bus bus, const bsp::can::rx_frame& frame, void* user_data)
+types::status dmmotorhandler::enable_block(dmmotor* device)
 {
-    if (user_data == nullptr)
+    if (!device) return types::status::invalid_arg;
+    device->enablefailed = true;
+    if (device->control_mode == mode::multi || !device->supports(mode::mit) || device->enable_timeout_ticks == 0 ||
+        device->enable_timeout_ticks > 0x7fffffffU) return types::status::invalid_arg;
+    if (tx_thread_identify() == nullptr) return types::status::invalid_context;
+    const auto before = device->feedback_token();
+    const auto result = enable(device);
+    if (result != types::status::ok) return result;
+    const ULONG started = tx_time_get();
+    for (;;)
     {
-        return;
-    }
-    static_cast<dmmotorhandler*>(user_data)->dispatch_rx(bus, frame);
-}
-
-void dmmotorhandler::enable_block(dmmotor* motor)
-{
-    if (motor == nullptr || motor->control_mode == mode::multi)
-    {
-        return;
-    }
-
-    uint16_t timeout = 0;
-    do
-    {
-        timeout++;
-        if (timeout > 1000)
+        const auto current = device->feedback_token();
+        if (current != before)
         {
-            motor->enablefailed = true;
-            break;
+            const auto error = static_cast<dmmotor::error>(current & 0xfU);
+            if (error == dmmotor::error::enable)
+            {
+                device->enablefailed = false;
+                return types::status::ok;
+            }
+            if (error != dmmotor::error::disable) return types::status::error;
         }
-        motor->transmit_frame(control_id(motor), dmmotor::enable_frame, 8);
-        tx_thread_sleep(1);
-    } while (motor->raw.err != dmmotor::error::enable);
+        if (static_cast<ULONG>(tx_time_get() - started) >= device->enable_timeout_ticks)
+            return types::status::error;
+        if (tx_thread_sleep(1) != TX_SUCCESS) return types::status::invalid_context;
+    }
 }
 
-void dmmotorhandler::enable(dmmotor* motor)
+types::status dmmotorhandler::enable(dmmotor* device)
 {
-    if (motor == nullptr || motor->control_mode == mode::multi)
-    {
-        return;
-    }
-    motor->transmit_frame(control_id(motor), dmmotor::enable_frame, 8);
+    if (!device || device->control_mode == mode::multi) return types::status::invalid_arg;
+    return device->transmit_frame(device->wire_control_id(), dmmotor::enable_frame, 8);
 }
 
-void dmmotorhandler::disable(dmmotor* motor)
+types::status dmmotorhandler::disable(dmmotor* device)
 {
-    if (motor == nullptr || motor->control_mode == mode::multi)
-    {
-        return;
-    }
-    motor->transmit_frame(control_id(motor), dmmotor::disable_frame, 8);
+    if (!device) return types::status::invalid_arg;
+    device->relax();
+    return device->set_output();
 }
 
-void dmmotorhandler::save_zero(dmmotor* motor)
+types::status dmmotorhandler::save_zero(dmmotor* device)
 {
-    if (motor == nullptr)
-    {
-        return;
-    }
-    motor->transmit_frame(control_id(motor), dmmotor::save_zero_frame, 8);
+    if (!device) return types::status::invalid_arg;
+    return device->transmit_frame(device->wire_control_id(), dmmotor::save_zero_frame, 8);
 }
 
-void dmmotorhandler::clear_error(dmmotor* motor)
+types::status dmmotorhandler::clear_error(dmmotor* device)
 {
-    if (motor == nullptr)
-    {
-        return;
-    }
-    motor->transmit_frame(control_id(motor), dmmotor::clear_error_frame, 8);
+    if (!device) return types::status::invalid_arg;
+    return device->transmit_frame(device->wire_control_id(), dmmotor::clear_error_frame, 8);
 }
 
 } // namespace motors

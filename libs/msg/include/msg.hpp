@@ -1,6 +1,5 @@
 #pragma once
 
-#include "memory.h"
 #include "usertypes.hpp"
 #include "tx_api.h"
 
@@ -11,44 +10,35 @@
 namespace msg
 {
 
-// 单个 topic 最多支持的订阅者数量；每个订阅者都有独立的 pending 标记。
-inline constexpr std::uint8_t max_subscribers_per_topic = 8;
+inline constexpr std::uint8_t max_subscribers_per_topic = 8U;
 
 struct subscriber_slot
 {
-    // active 表示槽位已分配，pending 表示该订阅者尚未读取最新发布的数据。
     bool active = false;
     bool pending = false;
 };
 
 struct topic_layout
 {
-    // 每个 topic 自带互斥锁，保护 payload 与订阅者槽位的并发访问。
     TX_MUTEX lock{};
-    std::size_t payload_size = 0;
+    std::size_t payload_size = 0U;
+    std::size_t payload_alignment = 0U;
     std::uint8_t* payload_bytes = nullptr;
-    subscriber_slot subs[max_subscribers_per_topic]{};
-    std::uint8_t sub_count = 0;
-    bool created = false;
+    subscriber_slot subscribers[max_subscribers_per_topic]{};
+    std::uint8_t subscriber_count = 0U;
+    bool initialized = false;
 };
 
 template <typename Payload>
-struct topic_entry : topic_layout
+struct topic_storage : topic_layout
 {
-    // payload 存放最后一次发布的消息；topic 本身只保留最新值。
-    alignas(8) Payload payload{};
+    alignas(Payload) Payload payload{};
 };
 
-struct topic
-{
-    topic_layout* layout = nullptr;
-
-    [[nodiscard]] bool valid() const { return layout != nullptr && layout->created; }
-};
-
+// Thread/initialization only. ISR publication returns invalid_context even with
+// block=false; use an ISR-safe queue/notification and publish from a thread.
 struct publish_opts
 {
-    // block=false 或 from_isr=true 时发布不会等待互斥锁，适合中断/非阻塞场景。
     bool block = true;
     bool from_isr = false;
 };
@@ -56,87 +46,103 @@ struct publish_opts
 struct subscriber
 {
     topic_layout* layout = nullptr;
-    std::uint8_t slot_idx = 0xFF;
+    std::uint8_t slot_index = 0xFFU;
 
-    [[nodiscard]] bool valid() const { return layout != nullptr && slot_idx != 0xFF; }
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return layout != nullptr && slot_index != 0xFFU;
+    }
 
-    [[nodiscard]] static constexpr subscriber invalid() { return {nullptr, 0xFF}; }
+    [[nodiscard]] static constexpr subscriber invalid() noexcept
+    {
+        return {nullptr, 0xFFU};
+    }
 };
 
-types::status init();
+types::status init() noexcept;
+
+namespace detail
+{
+
+types::status initialize_topic(topic_layout& layout) noexcept;
+types::status deinitialize_topic(topic_layout& layout) noexcept;
+subscriber subscribe(topic_layout& layout) noexcept;
+types::status publish(topic_layout& layout, const void* data, std::size_t size,
+                      publish_opts opts) noexcept;
+
+} // namespace detail
+
+// A channel is an explicitly owned topic instance. Payload type determines the
+// data contract, while object identity determines the topic identity. Two
+// channel<Payload> objects therefore remain independent topics.
+template <typename Payload>
+class channel
+{
+public:
+    static_assert(std::is_trivially_copyable_v<Payload>,
+                  "msg payload must be trivially copyable");
+
+    channel() = default;
+    channel(const channel&) = delete;
+    channel& operator=(const channel&) = delete;
+
+    [[nodiscard]] bool valid() const noexcept { return storage_.initialized; }
+    // Exposed for the small type-erased core only. Application code should use
+    // init/subscribe/publish overloads instead of retaining this reference.
+    topic_layout& native_layout() noexcept { return storage_; }
+    const topic_layout& native_layout() const noexcept { return storage_; }
+
+private:
+    topic_storage<Payload> storage_{};
+};
 
 template <typename Payload>
-topic* create()
+types::status init(channel<Payload>& topic) noexcept
 {
-    // 消息系统直接按字节拷贝载荷，因此载荷类型必须能安全地平凡复制。
-    static_assert(std::is_trivially_copyable_v<Payload>, "msg payload must be trivially copyable");
-
-    if (init() != types::status::ok)
+    auto& layout = topic.native_layout();
+    if (layout.initialized)
     {
-        return nullptr;
+        return types::status::ok;
     }
 
-    static topic_entry<Payload> storage RAM_D1_BSS;
-    static topic handle;
-
-    if (!storage.created)
-    {
-        // 每种 Payload 类型对应一个静态 topic，首次创建时完成一次性初始化。
-        storage.payload_size = sizeof(Payload);
-        storage.payload_bytes = reinterpret_cast<std::uint8_t*>(&storage.payload);
-        storage.sub_count = 0;
-
-        for (auto& slot : storage.subs)
-        {
-            slot.active = false;
-            slot.pending = false;
-        }
-
-        if (tx_mutex_create(&storage.lock, const_cast<CHAR*>("msg"), TX_NO_INHERIT) != TX_SUCCESS)
-        {
-            return nullptr;
-        }
-
-        storage.created = true;
-        handle.layout = &storage;
-    }
-
-    return &handle;
+    auto& storage = static_cast<topic_storage<Payload>&>(layout);
+    layout.payload_size = sizeof(Payload);
+    layout.payload_alignment = alignof(Payload);
+    layout.payload_bytes = reinterpret_cast<std::uint8_t*>(&storage.payload);
+    return detail::initialize_topic(layout);
 }
 
-subscriber subscribe(const topic* topic);
+// Only before subscribers or worker threads begin using the channel.
+// Used by an owner rolling back a failed initialization.
+template <typename Payload>
+types::status deinit(channel<Payload>& topic) noexcept
+{
+    return detail::deinitialize_topic(topic.native_layout());
+}
 
 template <typename Payload>
-subscriber subscribe()
+subscriber subscribe(channel<Payload>& topic) noexcept
 {
-    // 便捷订阅接口：按消息类型获取对应 topic，再为调用者分配订阅槽位。
-    const topic* topic = create<Payload>();
-    if (topic == nullptr)
-    {
-        return subscriber::invalid();
-    }
-    return subscribe(topic);
+    return detail::subscribe(topic.native_layout());
 }
 
-types::status publish(const topic* topic, const void* data, std::size_t size, publish_opts opts = {});
-
-template <typename T>
-types::status publish(const topic* topic, const T& data, publish_opts opts = {})
+template <typename Payload>
+types::status publish(channel<Payload>& topic, const Payload& data,
+                      publish_opts opts = {}) noexcept
 {
-    // 模板重载负责推导载荷大小，底层 publish 会校验大小是否匹配 topic。
-    static_assert(std::is_trivially_copyable_v<T>, "msg payload must be trivially copyable");
-    return publish(topic, &data, sizeof(T), opts);
+    return detail::publish(topic.native_layout(), &data, sizeof(data), opts);
 }
 
-bool available(subscriber sub);
-types::status read(subscriber sub, void* buf, std::size_t size);
+// Nonblocking hint: false also means lock contention. read() is authoritative.
+bool available(subscriber sub) noexcept;
+types::status read(subscriber sub, void* buffer, std::size_t size) noexcept;
 
-template <typename T>
-types::status read(subscriber sub, T& out)
+template <typename Payload>
+types::status read(subscriber sub, Payload& output) noexcept
 {
-    // 读取成功后会清除该订阅者自己的 pending 标记，不影响其他订阅者。
-    static_assert(std::is_trivially_copyable_v<T>, "msg payload must be trivially copyable");
-    return read(sub, &out, sizeof(T));
+    static_assert(std::is_trivially_copyable_v<Payload>,
+                  "msg payload must be trivially copyable");
+    return read(sub, &output, sizeof(output));
 }
 
 } // namespace msg

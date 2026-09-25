@@ -79,13 +79,14 @@ bool dmimu::initialize(const config& cfg)
     }
     rx_queue_ready_.store(true, std::memory_order_release);
 
-    if (bsp::can::init(cfg_.transport.can_bus, cfg_.transport.can_type) != types::status::ok)
+    if (bsp::can::init(cfg_.transport.can_bus) != types::status::ok)
     {
         rx_queue_ready_.store(false, std::memory_order_release);
         tx_queue_delete(&rx_queue_);
         return false;
     }
-    if (bsp::can::register_rx_handler(cfg_.transport.can_bus, rx_entry, this) != types::status::ok)
+    const auto callback = bsp::can::rx_callback::bind<dmimu, &dmimu::enqueue_from_isr>(this);
+    if (bsp::can::register_rx_callback(cfg_.transport.can_bus, callback) != types::status::ok)
     {
         rx_queue_ready_.store(false, std::memory_order_release);
         tx_queue_delete(&rx_queue_);
@@ -95,15 +96,6 @@ bool dmimu::initialize(const config& cfg)
     initialized_ = true;
     diag_.initialized = true;
     return true;
-}
-
-void dmimu::rx_entry(bsp::can::bus bus, const bsp::can::rx_frame& frame, void* user_data)
-{
-    auto* self = static_cast<dmimu*>(user_data);
-    if (self != nullptr)
-    {
-        self->enqueue_from_isr(bus, frame);
-    }
 }
 
 void dmimu::enqueue_from_isr(bsp::can::bus bus, const bsp::can::rx_frame& frame)

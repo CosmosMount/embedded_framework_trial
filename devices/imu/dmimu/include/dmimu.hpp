@@ -67,7 +67,8 @@ public:
 
     struct transport_config
     {
-        bsp::can::bus can_bus = bsp::can::bus::fdcan3;
+        // The composition layer must select a board-supported bus explicitly.
+        bsp::can::bus can_bus = bsp::can::bus::none;
         bsp::can::bus_type can_type = bsp::can::bus_type::classic;
         uint32_t can_id = 0x01U;
         uint32_t master_id = 0x11U;
@@ -198,7 +199,6 @@ private:
     static constexpr float quaternion_min = -1.0f;
     static constexpr float quaternion_max = 1.0f;
 
-    static void rx_entry(bsp::can::bus bus, const bsp::can::rx_frame& frame, void* user_data);
     void enqueue_from_isr(bsp::can::bus bus, const bsp::can::rx_frame& frame);
     void process_frame(const uint8_t data[8]);
     void decode_accel(const uint8_t data[8]);

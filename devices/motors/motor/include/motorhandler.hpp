@@ -3,44 +3,41 @@
 #include "bsp_can.hpp"
 #include "motor.hpp"
 
-#include <cstddef>
 #include <cstdint>
-#include <type_traits>
 
 namespace motors
 {
+
+class motor_service;
 
 class motorhandler
 {
 public:
     virtual ~motorhandler() = default;
 
-    virtual bool register_motor(motor* motor) = 0;
-    virtual void send_control() = 0;
-
-    template <typename Motor, typename = std::enable_if_t<is_motor_v<Motor>>>
-    bool register_motor(Motor& motor)
-    {
-        return register_motor(static_cast<motors::motor*>(&motor));
-    }
-
-    bool alive_check();
+    virtual protocol supported_protocol() const noexcept = 0;
+    virtual bool register_motor(motor& device) noexcept = 0;
+    virtual types::status start() noexcept { return types::status::ok; }
+    virtual types::status cleanup_status() const noexcept { return types::status::ok; }
+    virtual types::status stop() noexcept = 0;
+    virtual types::status send_control() noexcept = 0;
 
 protected:
+    static void retain_first_error(types::status& result, types::status next) noexcept
+    { if (result == types::status::ok) result = next; }
+
     static uint8_t bus_index(bsp::can::bus bus);
 
-    void track(motor* motor);
-
-    bool ensure_bus(bsp::can::bus bus, bsp::can::bus_type type, bsp::can::rx_handler entry,
-                    void* user_data);
+    bool ensure_bus(bsp::can::bus bus);
 
     virtual void dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame) = 0;
 
-    bool rx_ready_[bsp::can::bus_count]{};
+private:
+    friend class motor_service;
+    const motor_service* owner_ = nullptr;
 
-    static constexpr size_t max_tracked = bsp::can::bus_count * 8;
-    motor* tracked_[max_tracked]{};
-    size_t tracked_count_ = 0;
+protected:
+    bool rx_ready_[bsp::can::bus_count]{};
 };
 
 } // namespace motors

@@ -11,17 +11,15 @@ namespace motors
 class xv2motorhandler : public motorhandler
 {
 public:
-    using motorhandler::register_motor;
-
     static xv2motorhandler& instance();
 
-    bool register_motor(motor* motor) override;
-    void send_control() override;
+    protocol supported_protocol() const noexcept override { return protocol::xv2; }
+    bool register_motor(motor& device) noexcept override;
+    types::status stop() noexcept override;
+    types::status send_control() noexcept override;
 
 private:
     xv2motorhandler();
-
-    static void rx_entry(bsp::can::bus bus, const bsp::can::rx_frame& frame, void* user_data);
 
     void dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame) override;
 

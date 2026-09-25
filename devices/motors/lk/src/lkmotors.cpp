@@ -6,73 +6,88 @@
 namespace motors
 {
 
-lkmotor::lkmotor(config cfg, float kt) : motor(cfg, kt)
+lkmotor::lkmotor(config cfg, float kt, float model_reduction_ratio) : motor(cfg, kt)
 {
-    max_current = 2000;
+    if (cfg.protocol_options) options_ = *cfg.protocol_options;
+    reduction_ratio_ = options_.lk_reduction_ratio == 0.0f ? model_reduction_ratio : options_.lk_reduction_ratio;
+    max_current = options_.lk_protocol == lk_version::v2_3 ? 2000 : 2048;
+    amps_to_command_ = 2000.0f / 32.0f;
+    feedback_amperes_per_unit_ = 33.0f / 2048.0f;
 }
 
 void lkmotor::parse_feedback(const uint8_t* data, uint8_t len)
 {
-    if (data == nullptr || len < 8)
+    if (data == nullptr || len != 8 || !protocol_valid() ||
+        (data[0] != 0x9c && data[0] != 0xa1))
     {
         return;
     }
+    const uint16_t encoder = static_cast<uint16_t>((data[7] << 8) | data[6]);
+    if (encoder >= options_.lk_encoder_counts) return;
     mark_alive();
-    update_sensor_data(data);
+    raw.last_ecd = raw.ecd;
+    raw.ecd = encoder;
+    raw.speed_dps = static_cast<int16_t>((data[5] << 8) | data[4]);
+    raw.current_raw = static_cast<int16_t>((data[3] << 8) | data[2]);
+    fdb.temperature = static_cast<float>(static_cast<int8_t>(data[1]));
+
+    if (!feedback_seen_)
+    {
+        position_counts_ = zero_on_first_ ? 0 : raw.ecd;
+        zero_on_first_ = false;
+        raw.last_ecd = raw.ecd;
+        feedback_seen_ = true;
+    }
+    else
+    {
+        const int32_t counts = static_cast<int32_t>(options_.lk_encoder_counts);
+        int32_t delta = static_cast<int32_t>(raw.ecd) - raw.last_ecd;
+        if (delta > counts / 2) delta -= counts;
+        else if (delta < -counts / 2) delta += counts;
+        position_counts_ += delta;
+    }
+    fdb.position = (static_cast<float>(position_counts_) - offset) * position_scale() / reduction_ratio_;
+    fdb.velocity = static_cast<float>(raw.speed_dps) * (math::pi / 180.0f) / reduction_ratio_;
+    fdb.current = static_cast<float>(raw.current_raw);
+    fdb.current_amperes = fdb.current * feedback_amperes_per_unit_;
+    fdb.current_amperes_valid = true;
+    fdb.temperature_valid = true;
+    // Command and feedback scales differ in V2.3.
+    fdb.torque_valid = has_torque_calibration();
+    fdb.torque = fdb.torque_valid ? torque_from_current(fdb.current_amperes * amps_to_command_) : 0.0f;
 }
 
-void lkmotor::set_output()
+types::status lkmotor::set_output()
 {
     if (control_mode == mode::relax)
     {
         cmd.current = 0;
-        return;
+        return types::status::ok;
     }
+    return types::status::ok;
+}
 
-    if (control_mode == mode::torque)
+lk8016::lk8016(config cfg) : lkmotor(cfg, 0.0f, 6.0f)
+{
+    if (options_.lk_protocol == lk_version::v2_36) amps_to_command_ = 2048.0f / 33.0f;
+}
+
+lk9025::lk9025(config cfg) : lkmotor(cfg, 0.0f)
+{
+    if (options_.lk_protocol == lk_version::v2_36)
     {
-        cmd.current = static_cast<int16_t>(current_from_torque(cmd.torque));
+        amps_to_command_ = 2048.0f / 16.5f;
+        feedback_amperes_per_unit_ = 16.5f / 2048.0f;
     }
 }
 
-lk8016::lk8016(config cfg) : lkmotor(cfg, 0.0230399882f)
+void lkmotor::reset_position()
 {
-}
-
-void lk8016::update_sensor_data(const uint8_t* buffer)
-{
-    raw.last_ecd = raw.ecd;
-    raw.ecd = static_cast<uint16_t>((buffer[7] << 8) | buffer[6]);
-    raw.speed_dps = static_cast<int16_t>((buffer[5] << 8) | buffer[4]);
-    raw.current_raw = static_cast<int16_t>((buffer[3] << 8) | buffer[2]);
-    fdb.temperature = static_cast<float>(buffer[1]);
-
-    fdb.position = math::clamp_loop(
-        static_cast<float>(raw.ecd - static_cast<uint16_t>(offset)) * raw_pos_to_rad, -math::pi,
-        math::pi);
-    fdb.velocity = static_cast<float>(raw.speed_dps) * raw_dps_to_rps * gear_ratio;
-    fdb.current = static_cast<float>(raw.current_raw);
-    fdb.torque = torque_from_current(fdb.current);
-}
-
-lk9025::lk9025(config cfg) : lkmotor(cfg, 0.00512f)
-{
-}
-
-void lk9025::update_sensor_data(const uint8_t* buffer)
-{
-    raw.last_ecd = raw.ecd;
-    raw.ecd = static_cast<uint16_t>((buffer[7] << 8) | buffer[6]);
-    raw.speed_dps = static_cast<int16_t>((buffer[5] << 8) | buffer[4]);
-    raw.current_raw = static_cast<int16_t>((buffer[3] << 8) | buffer[2]);
-    fdb.temperature = static_cast<float>(buffer[1]);
-
-    fdb.position = math::clamp_loop(
-        static_cast<float>(raw.ecd - static_cast<uint16_t>(offset)) * raw_pos_to_rad, -math::pi,
-        math::pi);
-    fdb.velocity = static_cast<float>(raw.speed_dps) * raw_dps_to_rps;
-    fdb.current = static_cast<float>(raw.current_raw);
-    fdb.torque = torque_from_current(fdb.current);
+    position_counts_ = 0;
+    zero_on_first_ = !feedback_seen_;
+    offset = 0.0f;
+    fdb.position = 0.0f;
+    // The next valid sample continues from the last encoder sample.
 }
 
 } // namespace motors

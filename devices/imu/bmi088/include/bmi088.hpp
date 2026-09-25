@@ -1,8 +1,9 @@
 #pragma once
+#include "config.hpp"
 
+#include "callback.hpp"
 #include "imu.hpp"
 
-#include "iir.hpp"
 #include "tx_api.h"
 
 namespace imu
@@ -11,7 +12,7 @@ namespace imu
 class bmi088 : public imu
 {
 public:
-    using data_ready_callback = void (*)(void* user);
+    using data_ready_callback = core::callback<void()>;
 
     struct temp_control_config
     {
@@ -34,6 +35,9 @@ public:
     bool read(reading& data) override;
     void verify_acc_chip_id() override;
     void verify_gyro_chip_id() override;
+    // Thread context, serialized with normal acquisition by the caller.
+    // Read one sample and report transport success; not a sensor self-test,
+    // freshness check or physical plausibility check. Updates the latest cache.
     void verify_acc_data() override;
     void verify_gyro_data() override;
     void temperature_control(float target_temp) override;
@@ -41,8 +45,11 @@ public:
     void set_heater_duty(float ratio);
     bool initialize_transport();
     bool start_temperature_control(const temp_control_config& cfg);
+    // Thread context, with no concurrent acquisition. Stops this device's
+    // temperature worker and releases its transport mutex after init failure.
+    bool shutdown();
     bool temperature_ready() const { return temperature_ready_; }
-    void set_gyro_data_ready_callback(data_ready_callback callback, void* user);
+    void set_gyro_data_ready_callback(data_ready_callback callback);
     uint32_t spi_read_error_count() const { return spi_read_error_count_; }
     uint32_t spi_write_error_count() const { return spi_write_error_count_; }
     uint32_t spi_lock_error_count() const { return spi_lock_error_count_; }
@@ -119,14 +126,13 @@ private:
     static constexpr float temp_over_exit = 44.8f;
     static constexpr float temp_fault_low = -20.0f;
     static constexpr float temp_fault_high = 85.0f;
-    static constexpr float temp_boost_duty = 0.06f;
-    static constexpr float temp_reboost_duty = 0.05f;
-    static constexpr float temp_approach_max_duty = 0.05f;
-    static constexpr float temp_hold_max_duty = 0.04f;
+    static constexpr float temp_boost_duty = params::bmi088::boost_duty;
+    static constexpr float temp_reboost_duty = params::bmi088::reboost_duty;
+    static constexpr float temp_hold_max_duty = params::bmi088::hold_max_duty;
     static constexpr ULONG temp_control_period_ticks = 125;
 
     static void temp_thread_entry(ULONG arg);
-    static void gyro_data_ready_entry(void* user);
+    void gyro_data_ready_entry();
     float calculate_temperature_duty(float temperature);
     float calculate_approach_duty(float temperature);
     bool valid_temperature(float temperature) const;
@@ -146,16 +152,11 @@ private:
     volatile bool temperature_ready_ = false;
     temp_state temp_state_ = temp_state::boost;
     float heater_duty_ = 0.0f;
-    data_ready_callback gyro_data_ready_callback_ = nullptr;
-    void* gyro_data_ready_user_ = nullptr;
+    data_ready_callback gyro_data_ready_callback_{};
     volatile uint32_t spi_read_error_count_ = 0;
     volatile uint32_t spi_write_error_count_ = 0;
     volatile uint32_t spi_lock_error_count_ = 0;
-    filter::iir sensor_filter[6] = {
-        filter::iir(333.0f, 0.707f, 0.001f), filter::iir(333.0f, 0.707f, 0.001f),
-        filter::iir(333.0f, 0.707f, 0.001f), filter::iir(333.0f, 0.707f, 0.001f),
-        filter::iir(333.0f, 0.707f, 0.001f), filter::iir(333.0f, 0.707f, 0.001f),
-    };
+
 };
 
 } // namespace imu

@@ -1,109 +1,127 @@
 #include "msg.hpp"
+#include "tx_thread.h"
+#include "tx_initialize.h"
 
 #include <cstring>
 
 namespace msg
 {
-
 namespace
 {
 
-// 消息总线只需要轻量初始化，目前用于阻止未初始化前的读写。
 bool bus_ready = false;
 
-ULONG mutex_wait_option(const publish_opts& opts)
+bool in_interrupt() noexcept
 {
-    // ISR 或非阻塞发布不能等待互斥锁，否则可能卡住实时路径。
-    if (opts.from_isr || !opts.block)
-    {
-        return TX_NO_WAIT;
-    }
-    return TX_WAIT_FOREVER;
+    const ULONG state = TX_THREAD_GET_SYSTEM_STATE();
+    return state != 0U && state < TX_INITIALIZE_IN_PROGRESS;
 }
 
-topic_layout* layout_of(const topic* topic)
+ULONG mutex_wait_option(const publish_opts& opts) noexcept
 {
-    // 统一处理 topic 空指针和未创建状态，简化公开接口的参数检查。
-    if (topic == nullptr || !topic->valid())
-    {
-        return nullptr;
-    }
-    return topic->layout;
+    return !opts.block || tx_thread_identify() == nullptr ? TX_NO_WAIT : TX_WAIT_FOREVER;
+}
+
+bool subscriber_valid(const subscriber& sub) noexcept
+{
+    return sub.valid() && sub.layout->initialized &&
+           sub.slot_index < max_subscribers_per_topic;
 }
 
 } // namespace
 
-types::status init()
+types::status init() noexcept
 {
-    if (bus_ready)
-    {
-        return types::status::ok;
-    }
-
+    if (in_interrupt()) return types::status::invalid_context;
     bus_ready = true;
     return types::status::ok;
 }
 
-subscriber subscribe(const topic* topic)
+namespace detail
 {
-    auto* layout = layout_of(topic);
-    if (layout == nullptr)
-    {
-        return subscriber::invalid();
-    }
 
-    if (tx_mutex_get(&layout->lock, TX_WAIT_FOREVER) != TX_SUCCESS)
-    {
-        return subscriber::invalid();
-    }
-
-    subscriber sub = subscriber::invalid();
-    for (std::uint8_t i = 0; i < max_subscribers_per_topic; ++i)
-    {
-        // 找到第一个空闲槽位作为订阅者句柄；槽位耗尽时返回 invalid。
-        if (!layout->subs[i].active)
-        {
-            layout->subs[i].active = true;
-            layout->subs[i].pending = false;
-            ++layout->sub_count;
-            sub.layout = layout;
-            sub.slot_idx = i;
-            break;
-        }
-    }
-
-    tx_mutex_put(&layout->lock);
-    return sub;
-}
-
-types::status publish(const topic* topic, const void* data, std::size_t size, publish_opts opts)
+types::status initialize_topic(topic_layout& layout) noexcept
 {
-    // 发布前先做完整的基本校验，避免写入错误 topic 或错误大小的载荷。
-    if (!bus_ready || data == nullptr || size == 0)
+    if (in_interrupt()) return types::status::invalid_context;
+    if (layout.payload_bytes == nullptr || layout.payload_size == 0U ||
+        layout.payload_alignment == 0U)
     {
         return types::status::invalid_arg;
     }
-
-    auto* layout = layout_of(topic);
-    if (layout == nullptr || layout->payload_bytes == nullptr)
-    {
-        return types::status::invalid_arg;
-    }
-
-    if (size != layout->payload_size)
-    {
-        return types::status::invalid_arg;
-    }
-
-    if (tx_mutex_get(&layout->lock, mutex_wait_option(opts)) != TX_SUCCESS)
+    if (init() != types::status::ok)
     {
         return types::status::error;
     }
 
-    std::memcpy(layout->payload_bytes, data, size);
+    layout.subscriber_count = 0U;
+    for (auto& slot : layout.subscribers)
+    {
+        slot = {};
+    }
 
-    // 新消息到达后，所有活跃订阅者都标记为待读。
-    for (auto& slot : layout->subs)
+    if (tx_mutex_create(&layout.lock, nullptr, TX_INHERIT) != TX_SUCCESS)
+    {
+        return types::status::error;
+    }
+
+    layout.initialized = true;
+    return types::status::ok;
+}
+
+types::status deinitialize_topic(topic_layout& layout) noexcept
+{
+    if (in_interrupt()) return types::status::invalid_context;
+    if (!layout.initialized) return types::status::ok;
+    if (layout.subscriber_count != 0U) return types::status::busy;
+    if (tx_mutex_delete(&layout.lock) != TX_SUCCESS) return types::status::error;
+    layout.initialized = false;
+    return types::status::ok;
+}
+
+subscriber subscribe(topic_layout& layout) noexcept
+{
+    // Services also subscribe from App_ThreadX_Init, before a thread is running.
+    // ThreadX rejects a nonzero wait option during kernel initialization.
+    const ULONG wait = tx_thread_identify() == nullptr ? TX_NO_WAIT : TX_WAIT_FOREVER;
+    if (in_interrupt() || !bus_ready || !layout.initialized ||
+        tx_mutex_get(&layout.lock, wait) != TX_SUCCESS)
+    {
+        return subscriber::invalid();
+    }
+
+    subscriber result = subscriber::invalid();
+    for (std::uint8_t index = 0U; index < max_subscribers_per_topic; ++index)
+    {
+        auto& slot = layout.subscribers[index];
+        if (!slot.active)
+        {
+            slot.active = true;
+            slot.pending = false;
+            ++layout.subscriber_count;
+            result = {&layout, index};
+            break;
+        }
+    }
+
+    tx_mutex_put(&layout.lock);
+    return result;
+}
+
+types::status publish(topic_layout& layout, const void* data, std::size_t size,
+                      publish_opts opts) noexcept
+{
+    if (opts.from_isr || in_interrupt()) return types::status::invalid_context;
+    if (!bus_ready || !layout.initialized || data == nullptr || size != layout.payload_size)
+    {
+        return types::status::invalid_arg;
+    }
+    if (tx_mutex_get(&layout.lock, mutex_wait_option(opts)) != TX_SUCCESS)
+    {
+        return types::status::busy;
+    }
+
+    std::memcpy(layout.payload_bytes, data, size);
+    for (auto& slot : layout.subscribers)
     {
         if (slot.active)
         {
@@ -111,68 +129,50 @@ types::status publish(const topic* topic, const void* data, std::size_t size, pu
         }
     }
 
-    tx_mutex_put(&layout->lock);
+    tx_mutex_put(&layout.lock);
     return types::status::ok;
 }
 
-bool available(subscriber sub)
+} // namespace detail
+
+bool available(subscriber sub) noexcept
 {
-    // available 是轻量查询：只检查订阅者自己的 pending 标记。
-    if (!bus_ready || !sub.valid())
+    if (in_interrupt() || !bus_ready || !subscriber_valid(sub) ||
+        tx_mutex_get(&sub.layout->lock, TX_NO_WAIT) != TX_SUCCESS)
     {
         return false;
     }
-
-    if (!sub.layout->created)
-    {
-        return false;
-    }
-
-    const auto& slot = sub.layout->subs[sub.slot_idx];
-    return slot.active && slot.pending;
+    const auto& slot = sub.layout->subscribers[sub.slot_index];
+    const bool result = slot.active && slot.pending;
+    tx_mutex_put(&sub.layout->lock);
+    return result;
 }
 
-types::status read(subscriber sub, void* buf, std::size_t size)
+types::status read(subscriber sub, void* buffer, std::size_t size) noexcept
 {
-    // 读取时同样校验订阅者、输出缓冲区和载荷大小，避免越界拷贝。
-    if (!bus_ready || !sub.valid() || buf == nullptr || size == 0)
+    if (in_interrupt()) return types::status::invalid_context;
+    if (!bus_ready || !subscriber_valid(sub) || buffer == nullptr ||
+        size != sub.layout->payload_size)
     {
         return types::status::invalid_arg;
     }
 
-    auto* layout = sub.layout;
-    if (!layout->created || layout->payload_bytes == nullptr)
-    {
-        return types::status::invalid_arg;
-    }
-
-    auto& slot = layout->subs[sub.slot_idx];
-    if (!slot.active)
-    {
-        return types::status::invalid_arg;
-    }
-
-    if (size != layout->payload_size)
-    {
-        return types::status::invalid_arg;
-    }
-
-    if (tx_mutex_get(&layout->lock, TX_WAIT_FOREVER) != TX_SUCCESS)
+    auto& layout = *sub.layout;
+    if (tx_mutex_get(&layout.lock, mutex_wait_option({})) != TX_SUCCESS)
     {
         return types::status::error;
     }
 
-    if (!slot.pending)
+    auto& slot = layout.subscribers[sub.slot_index];
+    if (!slot.active || !slot.pending)
     {
-        // 没有新消息时不改动输出缓冲区，调用者可用 available 先判断。
-        tx_mutex_put(&layout->lock);
-        return types::status::error;
+        tx_mutex_put(&layout.lock);
+        return types::status::empty;
     }
 
-    std::memcpy(buf, layout->payload_bytes, layout->payload_size);
-    // 每个订阅者独立消费消息，读取成功只清除当前槽位的 pending。
+    std::memcpy(buffer, layout.payload_bytes, size);
     slot.pending = false;
-    tx_mutex_put(&layout->lock);
+    tx_mutex_put(&layout.lock);
     return types::status::ok;
 }
 

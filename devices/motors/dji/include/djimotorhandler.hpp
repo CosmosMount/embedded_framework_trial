@@ -15,27 +15,22 @@ constexpr uint32_t dji_control_id_high = 0x1FF;
 class djimotorhandler : public motorhandler
 {
 public:
-    using motorhandler::register_motor;
-
     static djimotorhandler& instance();
 
-    bool register_motor(motor* motor) override;
-    void send_control() override;
+    protocol supported_protocol() const noexcept override { return protocol::dji; }
+    bool register_motor(motor& device) noexcept override;
+    types::status stop() noexcept override;
+    types::status send_control() noexcept override;
 
-    void blocked_check();
 
 private:
     djimotorhandler();
 
-    static void rx_entry(bsp::can::bus bus, const bsp::can::rx_frame& frame, void* user_data);
-
     void dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame) override;
 
-    djimotor* motor_list_[bsp::can::bus_count][8]{};
-    uint8_t send_data_low_[bsp::can::bus_count][8]{};
-    uint8_t send_data_high_[bsp::can::bus_count][8]{};
-    bool use_low_frame_[bsp::can::bus_count]{};
-    bool use_high_frame_[bsp::can::bus_count]{};
+    // RX IDs 0x201..0x20b. Feedback IDs must remain unique on a bus.
+    djimotor* motor_list_[bsp::can::bus_count][11]{};
+
 };
 
 } // namespace motors

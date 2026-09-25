@@ -11,6 +11,11 @@ namespace types
         not_configured,
         invalid_arg,
         busy,
+        not_initialized,
+        not_connected,
+        empty,
+        too_large,
+        invalid_context,
     };
 
 };
