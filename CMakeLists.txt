@@ -1,15 +1,11 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.23)
 
-set(PNX_BOARD "h723_mc02" CACHE STRING "Selected PNX board profile")
-set_property(CACHE PNX_BOARD PROPERTY STRINGS h723_mc02 f407_c_board)
-set(PNX_BOARD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/boards/${PNX_BOARD}")
-if(NOT EXISTS "${PNX_BOARD_DIR}/board.cmake" OR NOT EXISTS "${PNX_BOARD_DIR}/board.json")
-    message(FATAL_ERROR "Unknown or incomplete PNX_BOARD='${PNX_BOARD}'")
-endif()
-include("${PNX_BOARD_DIR}/board.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/configs/cmake/load_board.cmake")
+# Generated source is consumed here, never used as a configuration store.
+set(PNX_BOARD_CUBEMX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/boards/${PNX_BOARD}/cmake/stm32cubemx")
 
 if(NOT CMAKE_TOOLCHAIN_FILE)
-    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/gcc-arm-none-eabi.cmake"
+    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/configs/cmake/gcc-arm-none-eabi.cmake"
         CACHE FILEPATH "ARM toolchain for the selected board")
 endif()
 
@@ -29,32 +25,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(PNX_EMBEDDED_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/configs")
 set(PNX_EMBEDDED_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
-foreach(required_board_setting IN ITEMS
-        PNX_BOARD_IOC
-        PNX_BOARD_CUBEMX_DIR
-        PNX_BOARD_TOOLCHAIN
-        PNX_BOARD_LINKER_SCRIPT
-        PNX_BOARD_PARAMS
-        PNX_BOARD_ROBOT_CONFIG
-        PNX_BOARD_FAMILY)
-    if(NOT DEFINED ${required_board_setting})
-        message(FATAL_ERROR
-            "Board profile '${PNX_BOARD}' does not define ${required_board_setting}")
-    endif()
-endforeach()
-
-foreach(required_board_path IN ITEMS
-        PNX_BOARD_IOC
-        PNX_BOARD_CUBEMX_DIR
-        PNX_BOARD_TOOLCHAIN
-        PNX_BOARD_LINKER_SCRIPT
-        PNX_BOARD_PARAMS
-        PNX_BOARD_ROBOT_CONFIG)
-    if(NOT EXISTS "${${required_board_path}}")
-        message(FATAL_ERROR
-            "Board profile '${PNX_BOARD}' path ${required_board_path} does not exist: ${${required_board_path}}")
-    endif()
-endforeach()
+if(NOT EXISTS "${PNX_BOARD_CUBEMX_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+        "Generated CubeMX target missing: ${PNX_BOARD_CUBEMX_DIR}/CMakeLists.txt. "
+        "Configuration can still be checked with configs/cmake/configure.cmake.")
+endif()
 
 set(PNX_BSP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bsp" CACHE PATH
     "Development override for the matching bsp branch checkout")
@@ -92,12 +67,13 @@ mark_as_advanced(PNX_PARAMS_OVERRIDE)
 if(PNX_PARAMS_OVERRIDE)
     get_filename_component(PNX_BOARD_PARAMS "${PNX_PARAMS_OVERRIDE}" ABSOLUTE)
 endif()
-set(PNX_EMBEDDED_BOARD_CONFIG "${PNX_BOARD_DIR}/board.json")
+set(PNX_EMBEDDED_BOARD_CONFIG "${PNX_BOARD_CONFIG}")
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PNX_BOARD_IOC}"
     "${PNX_EMBEDDED_BOARD_CONFIG}"
-    "${PNX_BOARD_DIR}/board.cmake"
+    "${PNX_BOARD_CONFIG_DIR}/board.cmake"
+    "${PNX_BOARD_LINKER_SCRIPT}"
     "${PNX_BOARD_PARAMS}"
     "${PNX_EMBEDDED_ROBOT_CONFIG}"
     "${PNX_EMBEDDED_CONFIG_DIR}/defaults.json"
@@ -244,6 +220,7 @@ set(CMSIS_DSP_SOURCES
 )
 
 add_executable(${PROJECT_NAME})
+set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${PNX_BOARD_LINKER_SCRIPT}")
 
 add_subdirectory("${PNX_BOARD_CUBEMX_DIR}" "${CMAKE_BINARY_DIR}/stm32cubemx")
 if(PNX_BOARD_FAMILY STREQUAL "stm32f4")

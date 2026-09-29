@@ -4,8 +4,7 @@
 !.vscode/tasks.json
 # Agent rules, tests and profiles are versioned; raw runs stay local.
 .agents/runs/
-# Project-specific agent notes and history stay local; keep general standards versioned.
-.agents/docs/
+# Project requirements, design and reusable tests are versioned.
 agent-docs/
 .worktrees/
 .settings/
@@ -34,4 +33,3 @@ ninja-build.ninja
 install_manifest.txt
 .agents/experiment-profile.json
 .agents/pipeline.json
-.agents/tests/

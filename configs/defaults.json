@@ -79,7 +79,7 @@
     }
   },
   "boards": {
-    "h723_mc02": {
+    "h723_dmmc02": {
       "bmi088": {
         "boost_duty": 0.06,
         "reboost_duty": 0.05,
@@ -98,7 +98,7 @@
         "loop_sleep_ticks": 0
       }
     },
-    "f407_c_board": {
+    "f407_cboard": {
       "bmi088": {
         "boost_duty": 0.9,
         "reboost_duty": 0.9,
@@ -119,14 +119,14 @@
     }
   },
   "recommendations": {
-    "h723_mc02": {
+    "h723_dmmc02": {
       "bindings": {
         "remoter_uart": "uart5",
         "vt03_uart": "usart1",
         "referee_uart": "usart1"
       }
     },
-    "f407_c_board": {
+    "f407_cboard": {
       "bindings": {
         "remoter_uart": "usart3",
         "vt03_uart": "usart6",

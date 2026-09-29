@@ -1,0 +1,18 @@
+{
+  "build": {
+    "usbx": true
+  },
+  "bindings": {
+    "remoter_uart": "usart3",
+    "vt03_uart": "usart6",
+    "referee_uart": "usart6"
+  },
+  "can": {
+    "can1": {
+      "id_type": "standard"
+    },
+    "can2": {
+      "id_type": "standard"
+    }
+  }
+}

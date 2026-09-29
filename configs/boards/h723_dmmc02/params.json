@@ -1,0 +1,18 @@
+{
+  "bindings": {
+    "remoter_uart": "uart5",
+    "vt03_uart": "usart1",
+    "referee_uart": "usart1"
+  },
+  "can": {
+    "fdcan1": {
+      "id_type": "standard"
+    },
+    "fdcan2": {
+      "id_type": "standard"
+    },
+    "fdcan3": {
+      "id_type": "standard"
+    }
+  }
+}
