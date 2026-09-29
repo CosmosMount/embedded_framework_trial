@@ -31,15 +31,17 @@ if(NOT EXISTS "${PNX_BOARD_CUBEMX_DIR}/CMakeLists.txt")
         "Configuration can still be checked with configs/cmake/configure.cmake.")
 endif()
 
-set(PNX_BSP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bsp" CACHE PATH
-    "Development override for the matching bsp branch checkout")
+set(PNX_BSP_SOURCE_DIR "" CACHE PATH "Development override for the selected board BSP")
+if(NOT PNX_BSP_SOURCE_DIR)
+    set(PNX_BSP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bsp/${PNX_BOARD}")
+endif()
 mark_as_advanced(PNX_BSP_SOURCE_DIR)
 get_filename_component(PNX_BSP_SOURCE_DIR "${PNX_BSP_SOURCE_DIR}" ABSOLUTE)
 
-set(PNX_BSP_TARGET_FILE "${PNX_BSP_SOURCE_DIR}/bsp/target.cmake")
+set(PNX_BSP_TARGET_FILE "${PNX_BSP_SOURCE_DIR}/target.cmake")
 if(NOT EXISTS "${PNX_BSP_TARGET_FILE}")
     message(FATAL_ERROR
-        "Selected BSP checkout has no target manifest: ${PNX_BSP_TARGET_FILE}")
+        "Selected BSP has no target manifest: ${PNX_BSP_TARGET_FILE}")
 endif()
 unset(PNX_BSP_FAMILY)
 include("${PNX_BSP_TARGET_FILE}")
@@ -47,7 +49,7 @@ if(NOT DEFINED PNX_BSP_FAMILY OR NOT PNX_BSP_FAMILY STREQUAL PNX_BOARD_FAMILY)
     message(FATAL_ERROR
         "PNX_BOARD='${PNX_BOARD}' requires BSP family '${PNX_BOARD_FAMILY}', "
         "but '${PNX_BSP_SOURCE_DIR}' provides '${PNX_BSP_FAMILY}'. "
-        "Checkout the matching bsp V2 branch; PNX_BSP_SOURCE_DIR is only a development override.")
+        "Select the matching board BSP directory; PNX_BSP_SOURCE_DIR is only a development override.")
 endif()
 message(STATUS "PNX board: ${PNX_BOARD} (${PNX_BOARD_FAMILY}); BSP: ${PNX_BSP_SOURCE_DIR}")
 
@@ -93,6 +95,12 @@ unset(BOARD_CONFIG)
 unset(PARAMS)
 unset(ROBOT_CONFIG)
 unset(OUT_DIR)
+
+if(PNX_BOARD_FAMILY STREQUAL "stm32f4")
+    if(adc_channel_count GREATER 0 OR CAN_DIAG_ENABLED)
+        message(FATAL_ERROR "F407 BSP does not provide ADC or H7 FDCAN diagnostics")
+    endif()
+endif()
 
 function(pnx_exclude_bsp_module source_list module_name)
     file(TO_CMAKE_PATH "${PNX_BSP_SOURCE_DIR}/${module_name}/" module_prefix)
@@ -224,11 +232,10 @@ set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${PNX_BOARD_LI
 
 add_subdirectory("${PNX_BOARD_CUBEMX_DIR}" "${CMAKE_BINARY_DIR}/stm32cubemx")
 if(PNX_BOARD_FAMILY STREQUAL "stm32f4")
-    # F4 tx_application_define registers a stack-error callback before app startup.
-    # ThreadX returns TX_FEATURE_NOT_ENABLED unless this is enabled consistently.
+    # Preserve F4 stack checking consistently in ThreadX and its consumers.
     target_compile_definitions(stm32cubemx INTERFACE TX_ENABLE_STACK_CHECKING)
 endif()
-# CubeMX Core owns ThreadX entry; its USER CODE hook calls app_start.
+# CubeMX owns ThreadX startup; app_start integration remains a separate task.
 include("${PNX_EMBEDDED_CONFIG_DIR}/cmake/usbx_integration.cmake")
 
 target_sources(${PROJECT_NAME} PRIVATE

@@ -32,7 +32,7 @@ class CoreTests(unittest.TestCase):
             raise RuntimeError(generation.stdout + generation.stderr)
         cls.executable = root / "core_tests.exe"
         includes = [ROOT / ".agents/tests/host", root / "generated"]
-        for tree in ("libs", "bsp", "devices", "modules"):
+        for tree in ("libs", "bsp/h723_dmmc02", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
         sources = [ROOT / ".agents/tests/host/test_core.cpp", ROOT / "libs/control/src/pid.cpp",
                    ROOT / "libs/math/src/constrain.cpp", ROOT / "libs/math/src/trans.cpp",
@@ -62,3 +62,35 @@ class CoreTests(unittest.TestCase):
 
     def test_motor_packets_and_registration(self):
         self.check_case("motors")
+
+
+class BxCanTests(unittest.TestCase):
+    def test_f407_hal_adapter(self):
+        compiler = shutil.which("g++")
+        if not compiler:
+            self.skipTest("Host g++ is required")
+        with tempfile.TemporaryDirectory(prefix="pnx-bxcan-") as temporary:
+            root = Path(temporary).resolve()
+            profile = ROOT / "configs/boards/f407_cboard"
+            params = json.loads((profile / "params.json").read_text(encoding="utf-8"))
+            params["can"] = {"can2": {"id_type": "extended"}}
+            (root / "params.json").write_text(json.dumps(params), encoding="utf-8")
+            generation = subprocess.run([
+                "cmake", f"-DIOC={profile}/f407_cboard.ioc",
+                f"-DBOARD_CONFIG={profile}/board.json", f"-DPARAMS={root}/params.json",
+                f"-DROBOT_CONFIG={profile}/robot.json", "-DPNX_BOARD_FAMILY=stm32f4",
+                f"-DOUT_DIR={root}/generated", "-P", str(ROOT / "configs/cmake/generate_config.cmake"),
+            ], text=True, capture_output=True)
+            self.assertEqual(generation.returncode, 0, generation.stdout + generation.stderr)
+            includes = [ROOT / ".agents/tests/host", root / "generated",
+                        ROOT / "libs/common/include", ROOT / "bsp/f407_cboard/can/include",
+                        ROOT / "bsp/f407_cboard/can/src"]
+            command = [compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror"]
+            command.extend(f"-I{path}" for path in includes)
+            binary = root / "bxcan.exe"
+            command.extend([str(ROOT / ".agents/tests/host/test_bxcan.cpp"),
+                            str(ROOT / "bsp/f407_cboard/can/src/bsp_can.cpp"), "-o", str(binary)])
+            result = subprocess.run(command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(binary)], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

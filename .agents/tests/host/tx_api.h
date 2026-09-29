@@ -13,3 +13,7 @@ constexpr UINT TX_SUCCESS = 0;
 TX_THREAD* tx_thread_identify();
 ULONG tx_time_get();
 UINT tx_thread_sleep(ULONG);
+
+using CHAR = char;
+UINT tx_semaphore_create(TX_SEMAPHORE*, CHAR*, ULONG);
+UINT tx_semaphore_put(TX_SEMAPHORE*);
