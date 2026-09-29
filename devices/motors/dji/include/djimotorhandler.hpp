@@ -24,7 +24,7 @@ public:
 
 
 private:
-    djimotorhandler();
+    djimotorhandler() = default;
 
     void dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame) override;
 

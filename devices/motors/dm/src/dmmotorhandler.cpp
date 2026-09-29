@@ -9,17 +9,6 @@ dmmotorhandler& dmmotorhandler::instance()
     return handler;
 }
 
-dmmotorhandler::dmmotorhandler()
-{
-    for (auto& row : motor_list_)
-    {
-        for (auto& slot : row)
-        {
-            slot = nullptr;
-        }
-    }
-}
-
 bool dmmotorhandler::register_motor(motor& device) noexcept
 {
     if (device.get_protocol() != protocol::dm)

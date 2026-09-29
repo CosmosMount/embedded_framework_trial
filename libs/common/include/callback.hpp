@@ -26,18 +26,21 @@ public:
     template <typename Object, Result (Object::*Method)(Args...)>
     static constexpr callback bind(Object* object) noexcept
     {
-        return callback{object, &invoke_member<Object, Method>};
+        return object != nullptr ? callback{object, &invoke_member<Object, Method>} : callback{};
     }
 
     template <typename Object, Result (Object::*Method)(Args...) const>
     static constexpr callback bind(const Object* object) noexcept
     {
-        return callback{const_cast<Object*>(object), &invoke_const_member<Object, Method>};
+        return object != nullptr
+                   ? callback{const_cast<Object*>(object), &invoke_const_member<Object, Method>}
+                   : callback{};
     }
 
     constexpr bool valid() const noexcept { return entry_ != nullptr; }
     constexpr explicit operator bool() const noexcept { return valid(); }
 
+    // Call only after checking validity, as with a raw function pointer.
     Result operator()(Args... args) const
     {
         return entry_(context_, std::forward<Args>(args)...);

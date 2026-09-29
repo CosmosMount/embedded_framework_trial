@@ -9,17 +9,6 @@ lkmotorhandler& lkmotorhandler::instance()
     return handler;
 }
 
-lkmotorhandler::lkmotorhandler()
-{
-    for (auto& row : motor_list_)
-    {
-        for (auto& slot : row)
-        {
-            slot = nullptr;
-        }
-    }
-}
-
 bool lkmotorhandler::register_motor(motor& device) noexcept
 {
     if (device.get_protocol() != protocol::lk)

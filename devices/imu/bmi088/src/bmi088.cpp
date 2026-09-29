@@ -334,11 +334,8 @@ void bmi088::temp_thread_entry(ULONG arg)
     auto& pid = self->temp_pid;
     self->test.temp_ctrl_err = false;
     self->update_status_from_selftest();
-    pid.mode = static_cast<control::pid_mode>(
-        static_cast<uint8_t>(control::pid_mode::position) |
-        static_cast<uint8_t>(control::pid_mode::integral_limit) |
-        static_cast<uint8_t>(control::pid_mode::changing_integral_rate) |
-        static_cast<uint8_t>(control::pid_mode::derivative_on_measurement));
+    pid.mode = control::pid_mode::position | control::pid_mode::integral_limit |
+               control::pid_mode::changing_integral_rate | control::pid_mode::derivative_on_measurement;
     pid.tune(params::bmi088::pid_kp, params::bmi088::pid_ki, params::bmi088::pid_kd);
     pid.max_out = params::bmi088::pid_max_out;
     pid.max_iout = params::bmi088::pid_max_iout;

@@ -83,7 +83,6 @@ bool vt03::create_resources()
     ready_frame_idx_ = 0;
     write_frame_idx_ = 0;
     frame_ready_ = false;
-    rx_buffer_ = rx_buffer_storage.data();
     if (bsp::usart::start_rx_to_idle(cfg_.uart_port, rx_buffer_storage.view(),
                                      bsp::usart::rx_callback::bind<vt03, &vt03::vt03_rx_callback>(this),
                                      nullptr) != types::status::ok)

@@ -164,7 +164,6 @@ bool ps2_uart::create_resources()
 
     std::memset(rx_buffer_storage.data(), 0, rx_buffer_storage.capacity());
     std::memset(stream_buffer_, 0, sizeof(stream_buffer_));
-    rx_buffer_ = rx_buffer_storage.data();
     stream_head_ = 0;
     stream_tail_ = 0;
     stream_overflow_ = false;

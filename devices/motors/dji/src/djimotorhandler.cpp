@@ -9,17 +9,6 @@ djimotorhandler& djimotorhandler::instance()
     return handler;
 }
 
-djimotorhandler::djimotorhandler()
-{
-    for (auto& row : motor_list_)
-    {
-        for (auto& slot : row)
-        {
-            slot = nullptr;
-        }
-    }
-}
-
 bool djimotorhandler::register_motor(motor& device) noexcept
 {
     if (device.get_protocol() != protocol::dji)

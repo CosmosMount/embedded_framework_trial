@@ -23,7 +23,7 @@ public:
     types::status send_control() noexcept override;
 
 private:
-    lkmotorhandler();
+    lkmotorhandler() = default;
 
     void dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame) override;
 

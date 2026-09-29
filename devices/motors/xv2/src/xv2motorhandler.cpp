@@ -9,17 +9,6 @@ xv2motorhandler& xv2motorhandler::instance()
     return handler;
 }
 
-xv2motorhandler::xv2motorhandler()
-{
-    for (auto& row : motor_list_)
-    {
-        for (auto& slot : row)
-        {
-            slot = nullptr;
-        }
-    }
-}
-
 bool xv2motorhandler::register_motor(motor& device) noexcept
 {
     if (device.get_protocol() != protocol::xv2)

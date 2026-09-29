@@ -65,7 +65,6 @@ private:
     // F407 DR16 receive and publish paths leave insufficient headroom at 768 B.
     alignas(8) std::uint8_t stack_[1536]{};
 
-    std::uint8_t* rx_buffer_ = nullptr;
     alignas(4) std::uint8_t frame_buffers_[2][dr16_frame_size]{};
     volatile std::uint8_t ready_frame_idx_ = 0;
     std::uint8_t write_frame_idx_ = 0;
@@ -93,7 +92,6 @@ private:
     TX_SEMAPHORE rx_sem_{};
     alignas(8) std::uint8_t stack_[768]{};
 
-    std::uint8_t* rx_buffer_ = nullptr;
     alignas(4) std::uint8_t frame_buffers_[2][vt03_frame_size]{};
     volatile std::uint8_t ready_frame_idx_ = 0;
     std::uint8_t write_frame_idx_ = 0;
@@ -122,7 +120,6 @@ private:
     TX_SEMAPHORE rx_sem_{};
     alignas(8) std::uint8_t stack_[768]{};
 
-    std::uint8_t* rx_buffer_ = nullptr;
     std::uint8_t stream_buffer_[stream_buffer_size]{};
     volatile std::size_t stream_head_ = 0;
     volatile std::size_t stream_tail_ = 0;

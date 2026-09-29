@@ -53,7 +53,7 @@ using update_callback = core::callback<void(const packet_store&, const update_in
 struct config
 {
     bsp::usart::port uart_port = app::uart::referee;
-    uint32_t thread_priority = 8;
+    uint32_t thread_priority = params::referee::thread_priority;
     // Invoked synchronously in the referee receive thread after a valid frame is processed.
     // The callback must not block. Configuration is fixed by the first successful init().
     update_callback on_update_callback{};
@@ -87,7 +87,6 @@ private:
     RefereeRingBuffer rx_fifo_{};
     packet_store packets_{};
     communication_status status_{};
-    uint8_t* rx_buffer_ = nullptr;
     bool initialized_ = false;
 };
 

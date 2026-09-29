@@ -113,7 +113,6 @@ bool service::create_resources()
     }
 
     std::memset(rx_buffer_storage.data(), 0, rx_buffer_storage.capacity());
-    rx_buffer_ = rx_buffer_storage.data();
 
     if (bsp::usart::init(cfg_.uart_port, bsp::usart::mode::dma) != types::status::ok)
     {

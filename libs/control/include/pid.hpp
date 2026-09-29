@@ -1,8 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include "constrain.hpp"
-#include <cmath>
 
 namespace control
 {
@@ -18,6 +16,12 @@ enum class pid_mode : uint8_t
     integral_limit = 0x40,
     derivative_incomplete = 0x80,
 };
+
+// Select one base mode (position/delta), then combine the desired options.
+constexpr pid_mode operator|(pid_mode lhs, pid_mode rhs) noexcept
+{
+    return static_cast<pid_mode>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
+}
 
 class pid
 {
@@ -46,14 +50,12 @@ public:
     float scalar_b = 0.0f;
 
 private:
-    void apply_trapezoid_integral();
-    void apply_derivative_on_measurement();
     void apply_integral_separation();
     void apply_changing_integral_rate();
     void apply_integral_limit();
 
     float last_fdb = 0.0f;
-    float err[3]{};
+    float err[2]{};
     float p_out = 0.0f;
     float i_out = 0.0f;
     float d_out = 0.0f;

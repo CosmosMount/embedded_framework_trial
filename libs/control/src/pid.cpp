@@ -1,17 +1,11 @@
 #include "pid.hpp"
 
+#include "constrain.hpp"
+
+#include <cmath>
+
 namespace control
 {
-
-void pid::apply_trapezoid_integral()
-{
-    i_term = ki * ((err[0] + err[1]) / 2.0f);
-}
-
-void pid::apply_derivative_on_measurement()
-{
-    d_out = kd * (last_fdb - fdb);
-}
 
 void pid::apply_integral_separation()
 {
@@ -80,30 +74,29 @@ void pid::tune(float new_kp, float new_ki, float new_kd)
 
 void pid::update(float velocity)
 {
-    err[2] = err[1];
     err[1] = err[0];
     err[0] = ref - fdb;
 
     p_out = kp * err[0];
     i_term = ki * err[0];
 
-    if (mode == pid_mode::position)
+    const auto mode_bits = static_cast<uint8_t>(mode);
+    if ((mode_bits & static_cast<uint8_t>(pid_mode::position)) != 0U)
     {
         d_out = kd * (err[0] - err[1]);
     }
-    else if (mode == pid_mode::delta)
+    else if ((mode_bits & static_cast<uint8_t>(pid_mode::delta)) != 0U)
     {
         d_out = kd * velocity;
     }
 
-    const auto mode_bits = static_cast<uint8_t>(mode);
     if ((mode_bits & static_cast<uint8_t>(pid_mode::trapezoid_integral)) != 0U)
     {
-        apply_trapezoid_integral();
+        i_term = ki * ((err[0] + err[1]) / 2.0f);
     }
     if ((mode_bits & static_cast<uint8_t>(pid_mode::derivative_on_measurement)) != 0U)
     {
-        apply_derivative_on_measurement();
+        d_out = kd * (last_fdb - fdb);
     }
     if ((mode_bits & static_cast<uint8_t>(pid_mode::integral_separation)) != 0U)
     {
@@ -129,9 +122,9 @@ void pid::update(float velocity)
 void pid::clear()
 {
     last_fdb = fdb = 0.0f;
-    err[0] = err[1] = err[2] = 0.0f;
+    err[0] = err[1] = 0.0f;
     p_out = i_out = d_out = result = 0.0f;
-    ref = fdb = 0.0f;
+    ref = 0.0f;
     i_term = 0.0f;
     scalar_a = 1.0f;
     scalar_b = 1.0f;
@@ -142,7 +135,7 @@ void pid::reset_state(float reference, float feedback)
     ref = reference;
     fdb = feedback;
     last_fdb = feedback;
-    err[0] = err[1] = err[2] = 0.0f;
+    err[0] = err[1] = 0.0f;
     p_out = i_out = d_out = result = 0.0f;
     i_term = 0.0f;
 }

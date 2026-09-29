@@ -19,7 +19,7 @@ public:
     types::status send_control() noexcept override;
 
 private:
-    xv2motorhandler();
+    xv2motorhandler() = default;
 
     void dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame) override;
 

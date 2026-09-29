@@ -35,7 +35,7 @@ public:
     types::status cleanup_status() const noexcept override { return cleanup_status_; }
 
 private:
-    dmmotorhandler();
+    dmmotorhandler() = default;
 
     void dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& frame) override;
 

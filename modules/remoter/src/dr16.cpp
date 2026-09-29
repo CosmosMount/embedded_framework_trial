@@ -38,7 +38,6 @@ bool dr16::create_resources()
     ready_frame_idx_ = 0;
     write_frame_idx_ = 0;
     frame_ready_ = false;
-    rx_buffer_ = rx_buffer_storage.data();
 
     if (bsp::usart::init(cfg_.uart_port, bsp::usart::mode::dma) != types::status::ok)
     {
