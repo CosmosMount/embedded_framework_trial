@@ -10,7 +10,7 @@ PnX 是面向 STM32 与 ThreadX 的可复用下位机模板，包含配置生成
 
 - `configs/`：全部 PnX 配置源，包括 IOC、固定绑定、参数、设备组合、preset、工具链与产品链接脚本。使用说明见 [配置入口](configs/README.md)。
 - `boards/`：CubeMX 生成代码与原生工程，供固件构建消费；配置解析不依赖该目录。
-- `bsp/`：外设接口和板族实现；`devices/`：设备驱动。
+- `bsp/<板型>/<外设>/`：两板各自的外设接口和实现；`devices/`：设备驱动。
 - `modules/`：AHRS、遥控器、裁判系统等功能；`libs/`：通用库。
 - `app/app.cpp`：机器人应用启动入口。按项目需要在 `app_start()` 初始化服务和控制任务。
 
@@ -18,7 +18,7 @@ PnX 是面向 STM32 与 ThreadX 的可复用下位机模板，包含配置生成
 
 需要 Arm GNU Toolchain、CMake 3.23 或更高版本和 Ninja。选择 `configs/boards/h723_dmmc02/` 或 `configs/boards/f407_cboard/`，按需编辑 `params.json` 与 `robot.json`，再 Configure 和 Build。参数只保留相对默认值的差异，优先级与各文件职责见 [配置入口](configs/README.md)。不要编辑 `build/` 中的生成文件。
 
-配置和根构建已接通，H723 Debug 已通过编译与链接。F407 缺少匹配 BSP；两板应用启动钩子仍待接入，不能将链接成功视为机器人应用可运行。限制见 [SPEC 的未决事项](.agents/docs/SPEC.md#未决事项)。
+H723 与 F407 均有仓库内 BSP，Debug/Release 已通过编译链接；两板应用启动钩子仍待接入，不能将链接成功视为机器人应用可运行。限制见 [SPEC 的未决事项](.agents/docs/SPEC.md#未决事项)。
 
 ```powershell
 cmake --preset h723-debug
@@ -33,7 +33,7 @@ cmake -DPNX_BOARD=h723_dmmc02 -DOUT_DIR=build/config-preview/h723 -P configs/cma
 
 IOC 权威源已移入 `configs/boards/<板型>/`；上述预览同时导出显式指向根目录 `boards/<板型>/` 的 CubeMX 脚本，重新生成前请按配置指南核对输出目录。
 
-F407 选择对应的 `f407-debug` preset 和 F4 BSP。`PNX_BOARD` 不会自动切换 BSP 代码；需要另一份 BSP 工作树时，设置 `PNX_BSP_SOURCE_DIR`。构建产物位于 `build/<preset>/pnx_embedded.elf`。
+F407 使用 `f407-debug` preset。`PNX_BOARD` 自动选择 `bsp/h723_dmmc02/` 或 `bsp/f407_cboard/`；开发外部 BSP 时，可用 `PNX_BSP_SOURCE_DIR` 指向含 target.cmake 的板型目录。构建产物位于 `build/<preset>/pnx_embedded.elf`。
 
 配置工具应基于现有生成器校验，并使调试芯片与 ELF 路径匹配所选板型和构建类型。当前仓库提供编辑器上下文导出脚本，外部 PnX Config Editor、Cortex Kit 的安装与会话未核验；完整工作流目标见 DESIGN。硬件烧录和运行由操作者显式执行。
 

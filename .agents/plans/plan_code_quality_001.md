@@ -1,6 +1,6 @@
 ﻿# 自有代码优化计划 001
 
-状态：进行中。用户要求按项目代码风格优化整体项目。范围：审查 app/bsp/devices/modules/libs/configs 自有代码；不批量重排 CubeMX/CMSIS/第三方源码，不改变产品硬件参数，不引入新框架。
+状态：已完成本轮经验证优化。用户要求按项目代码风格优化整体项目。范围：审查 app/bsp/devices/modules/libs/configs 自有代码；不批量重排 CubeMX/CMSIS/第三方源码，不改变产品硬件参数，不引入新框架。
 
 ## 基线与验收
 
@@ -19,4 +19,4 @@ HEAD=41aa5f3，加前序已验收 configs 迁移及用户生成工程；本任�
 
 ## 结果
 
-待执行。F4 工作树与硬件不可用，硬件实时性/性能不作声明。
+修复前主机测试中 PID 组合微分、空对象 callback、referee 优先级三项 FAIL；电机路径 PASS。修复后三项及原配置回归合计 8 项 PASS（仓库根目录 python -m unittest discover -s .agents/tests -v）。H723 Debug 构建 PASS，另使用真实编译参数对 DR16/VT03/PS2 UART 做 ARM 语法检查，三项 PASS。已删除重复清零、无用指针、第三个误差历史和空 BSP 文件；公开协议、DMA 存储及配置值保留。首次提交后的记录复核发现中文脚本编码使结果替换未生效，本次修正文档记录，不改写已有提交。此轮未执行硬件验证；后续 F407 接入见双板计划。

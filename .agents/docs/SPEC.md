@@ -6,19 +6,19 @@
 
 项目提供 STM32 + ThreadX 机器人固件基础架构：板级资源、配置生成、BSP、设备驱动、功能模块、通用库与应用入口。`app/app.cpp` 的 `app_start()` 当前为空，具体机器人业务尚未实现。
 
-当前用户要求：项目配置集中到 configs/，配置解析不依赖 boards/，并提高可读性。IOC、固定绑定、板型身份、参数、设备组合、preset、工具链与产品链接脚本均由 configs/ 管理；boards/ 保留用户重生成的 CubeMX 产物。根 CMakePresets.json 仅作为工具发现入口。配置集中化作为既有约束保留。当前用户进一步授权按项目风格优化自有代码；修复明确缺陷、减少重复与无职责状态，并验证相关行为。应用启动接入、BSP 跨板族移植与硬件运行不由此次代码整理自动扩展。
+当前用户要求：项目配置集中到 configs/，配置解析不依赖 boards/，并提高可读性。IOC、固定绑定、板型身份、参数、设备组合、preset、工具链与产品链接脚本均由 configs/ 管理；boards/ 保留用户重生成的 CubeMX 产物。根 CMakePresets.json 仅作为工具发现入口。配置集中化作为既有约束保留。当前用户进一步授权按项目风格优化自有代码；修复明确缺陷、减少重复与无职责状态，并验证相关行为。用户现进一步授权分步提交，并整合历史 F407 BSP，按两个板型目录组织；应用启动和硬件运行仍不在本次范围。
 
 ## 工程约束
 
 - 根 `CMakeLists.txt` 定义 C11、C++17、源码选择与 BSP 板族校验；保留有效公开接口和 ThreadX/HAL 回调。
 - 配置参数以现有 JSON 为准；生成文件仅写入构建目录，不手工维护第二份配置。
-- `PNX_BOARD` 不会自动切换 BSP 实现；`PNX_BSP_SOURCE_DIR` 必须指向匹配板族的工作树。
+- `PNX_BOARD` 自动选择 `bsp/<板型>/`；`PNX_BSP_SOURCE_DIR` 默认留空，仅显式指定含 target.cmake 的替代板型目录，仍须通过板族校验。
 - 保留已有旧板目录删除与新生成代码；IOC 仅迁移到 configs，硬件参数不变。根固件构建可消费 boards 产物，但独立配置生成与编辑器导出不得读取其中的 PnX 配置。
 - 不编造性能、内存和时序阈值，不将编译通过等同于硬件验证通过。
 
 ## 架构目标与后续验收约束
 
-以下原则已采纳为后续设计约束，具体机器人实现仍未完成；不构成新增机器人业务、BSP 移植或硬件操作授权。实现机制与源码证据见 [DESIGN.md](DESIGN.md)。
+以下原则已采纳为后续设计约束，具体机器人实现仍未完成；不构成新增机器人业务或硬件操作授权。实现机制与源码证据见 [DESIGN.md](DESIGN.md)。
 
 | 编号 | 约束与适用范围 | 后续验收方法 |
 | --- | --- | --- |
@@ -41,7 +41,7 @@
 | 参数精简 | 移除与默认值相同的覆盖后，两板四个 C++ 生成文件与迁移前基线逐字节一致 |
 | 单一来源 | 主构建、工具链、独立预览、编辑器共享配置加载器；旧板名及旧工具链选择器退役 |
 | 输入拒绝 | 未知板型、身份冲突、IOC 不存在的固定绑定必须失败 |
-| 构建接入 | H723 Configure/链接通过；F407 缺少匹配 BSP 时明确拒绝，不降低板族约束 |
+| 构建接入 | 两板 Debug/Release 均 Configure/链接通过，源码与头只选择当前板 BSP；错误板族覆盖必须拒绝 |
 | 可读性 | configs/README.md 说明文件职责、覆盖顺序、单位、生成和构建工作流，不维护重复参数表 |
 | 工作区保护 | 不恢复旧板目录、不改业务参数，不操作硬件；IOC 移动不修改硬件配置 |
 
@@ -54,9 +54,9 @@
 | `cmake --list-presets` | 成功列出配置，不代表编译成功 |
 | `cmake --preset h723-debug` | 完整 H723 板级工程和 H7 BSP；成功生成构建系统 |
 | `cmake --build --preset h723-debug` | Configure 成功；成功链接对应构建目录的 `pnx_embedded.elf` |
-| `cmake --preset f407-debug` | 完整 F407 板级工程和 F4 BSP；需要时通过 `-DPNX_BSP_SOURCE_DIR=` 传入真实工作树路径 |
+| `cmake --preset f407-debug` | 完整 F407 生成工程和仓库内 bsp/f407_cboard；自动选板 |
 | `cmake --build --preset f407-debug` | F407 Configure 成功；成功链接对应 ELF |
-| `python -m unittest discover -s .agents/tests -v` | 真实生成器/编辑器隔离回归及非法输入拒绝；需要 Python 3.9+ 与 CMake |
+| `python -m unittest discover -s .agents/tests -v` | 生成器/编辑器、PID、callback、配置消费、电机协议及 F407 bxCAN 回归；需要 Python 3.9+、CMake 和主机 g++，缺 g++ 的跳过不能计为通过 |
 | `git diff --check` | 受跟踪修改无空白错误，不替代行为测试 |
 | 目标硬件检查 | 操作者明确执行，具体接线、业务指标与步骤尚未定义 |
 
@@ -64,10 +64,12 @@ Release 使用同板型的 `*-release` preset。根工程未注册 CTest 测试�
 
 ## 未决事项
 
-- 当前 bsp/bsp/target.cmake 为 stm32h7；F4 BSP 工作树未提供。F407 独立配置可生成，完整固件构建仍受阻。
+- F407 已接入当前框架；ADC 和 H7 FDCAN 诊断未移植，启用时根构建明确拒绝。当前 IOC 未开启 CAN SCE IRQ，错误中断通知需后续配置/硬件核验。F407 Release 中原 USBX 中间件存在数组边界编译告警，本次未改第三方代码。
 - 两板 App_ThreadX_Init() 均尚未调用 app_start()；H723 链接成功不代表应用控制任务已经启动。此项保留为后续独立接入工作。
 - IOC 已移入 configs；预览入口可导出显式定向 boards 的 CubeMX 脚本，但未在本次实际重新运行 CubeMX。GUI 重生成需显式核对输出位置。
 - 产品 memory.ld 由 configs 拥有，基于用户当前生成布局；H723 保留现有 BSP 要求的 DMA 段契约。其他配置组合与硬件运行尚未验证。
 - 具体机器人业务、性能及硬件验收待定义，不以设备配置替代产品需求。
 
 配置使用说明见 [configs/README.md](../../configs/README.md)，本次基线、实际验证和已解决失败统一记录于 [配置整理计划](../plans/plan_configs_001.md)。
+
+代码优化记录见 [代码优化计划](../plans/plan_code_quality_001.md)，双板整合证据见 [双板 BSP 计划](../plans/plan_bsp_boards_001.md)。

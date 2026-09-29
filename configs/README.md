@@ -52,7 +52,7 @@ cmake --preset h723-debug
 cmake --build --preset h723-debug
 ```
 
-要求 `boards/<板型>/` 下已生成的 CubeMX 工程、Arm GNU Toolchain 和 Ninja。实际产品工具链为 `cmake/gcc-arm-none-eabi.cmake`，由当前配置选择 CPU/FPU 和 memory.ld，不加载 boards 下的工具链。F407 使用 `f407-debug`，并通过 `-DPNX_BSP_SOURCE_DIR=<实际F4工作树路径>` 提供匹配 BSP；不能将占位路径直接执行。Release 使用同板型的 release preset。
+要求 `boards/<板型>/` 下已生成的 CubeMX 工程、Arm GNU Toolchain 和 Ninja。实际产品工具链为 `cmake/gcc-arm-none-eabi.cmake`，由当前配置选择 CPU/FPU 和 memory.ld，不加载 boards 下的工具链。F407 使用 `f407-debug`，自动选择 `bsp/f407_cboard/`；H723 对应 `bsp/h723_dmmc02/`。`PNX_BSP_SOURCE_DIR` 默认留空，仅开发外部 BSP 时覆盖。旧缓存曾保存平铺 BSP 路径，迁移时使用 `cmake --fresh --preset h723-debug` 清除该路径。Release 使用同板型的 release preset。
 
 固件输出为 `build/<preset>/pnx_embedded.elf`。根工程的高级覆盖参数 `PNX_PARAMS_OVERRIDE`、`PNX_ROBOT_CONFIG_OVERRIDE` 用于显式验证，常规配置仍修改本目录；不同板型须使用不同构建目录。旧缓存可能保存旧工具链路径，迁移后使用新的构建目录，勿沿用旧选择器。
 

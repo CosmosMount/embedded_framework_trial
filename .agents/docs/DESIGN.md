@@ -6,7 +6,7 @@ PnX 是面向 STM32 与 ThreadX 的可复用下位机模板，具体机器人的
 
 1. **闭环留在 MCU。** 采样、估计、控制与执行器提交由 MCU 拥有；MiniPC 提供感知、规划或目标，其延迟与重连不应成为控制周期的等待条件。通用主机协议与完整控制应用尚未提供。
 2. **硬件事实单一来源。** configs 内 IOC 拥有引脚、时钟、DMA、NVIC 和外设模式，CubeMX 代码为派生实现；同目录的板级 JSON 描述固定绑定与内存事实。业务使用生成的逻辑标识符，不重复硬件句柄与板号。
-3. **共享语义，保留真实差异。** 构建时选择匹配板族的 BSP；公共接口应保持一致，CAN 能力、DMA 可达性与 cache 差异留在板级事实和私有实现，不支持的能力明确拒绝。当前仅能核实 H7 工作树，不能宣称 F4 实现已核验。
+3. **共享语义，保留真实差异。** 构建时选择匹配板族的 BSP；公共接口应保持一致，CAN 能力、DMA 可达性与 cache 差异留在板级事实和私有实现，不支持的能力明确拒绝。仓库内提供 H723/F407 实现，编译和主机测试不等于板上验证。
 4. **资源与时间有所有者。** 明确对象、线程、回调目标、DMA/通信缓冲区的生命周期；周期任务定义触发源、优先级、最大等待、数据年龄和截止时间。初始化失败由资源创建者清理。
 5. **接口表达物理意义。** 物理量注明 SI 单位、参考坐标系及必要换算，协议原始量标为 raw。本地接受、外设提交与执行器反馈分开观测。
 6. **实现路径可追踪。** 从应用到模块、设备、BSP 能追踪数据、执行上下文和错误。新增封装须承担差异、所有权或复用职责，不为统一外观增设基类、服务定位器或注册中心。
@@ -38,7 +38,7 @@ flowchart TB
 | --- | --- |
 | `boards/` | CubeMX HAL/RTOS、启动及其生成的原生构建产物；不是 PnX 配置来源 |
 | `configs/` | IOC、固定资源、构建身份、工具链、产品链接脚本、preset、默认值、参数、设备组合及生成/编辑器入口 |
-| `bsp/` | 板族外设操作、IRQ 桥、DMA/cache；公共 API 与私有绑定分离 |
+| `bsp/<板型>/<外设>/` | 两板外设操作、IRQ 桥、DMA/cache；include 是公共 API，src 是私有实现 |
 | `devices/` | 设备协议、校准、单位转换、反馈与命令 |
 | `modules/` | 组合设备与算法，拥有自己的服务线程和同步资源 |
 | `libs/` | 不依赖特定机器人接线的消息、回调、状态、数学与控制工具 |
@@ -60,7 +60,15 @@ flowchart TB
 
 根 CMakePresets.json 只 include configs/CMakePresets.json，实际板型与构建选择在 configs 内。根构建、工具链、预览和编辑器均使用 configs/cmake/load_board.cmake，配置路径不依赖 boards。统一工具链 configs/cmake/gcc-arm-none-eabi.cmake 使用配置中的 CPU/FPU 与 memory.ld。根构建仅在消费生成源码时访问 boards/<板型>/cmake/stm32cubemx，并独立校验 BSP 板族。Configure 在构建目录生成 config.hpp、robot_config.hpp 和 bsp_bindings.cpp，并选择设备/模块源码，与 CubeMX 目标和 CMSIS-DSP 链接。pnx_embedded_sources.txt 是生成的选源清单，不是手工配置入口。
 
-PNX_BOARD 不切换 BSP Git 分支。PNX_BSP_SOURCE_DIR 指定匹配工作树；PNX_PARAMS_OVERRIDE 与 PNX_ROBOT_CONFIG_OVERRIDE 属于开发验证入口。BSP 私有 src/ 包含目录仅对 BSP 源码和生成绑定开放。
+PNX_BOARD 自动选择同名 BSP 目录，不切换 Git 分支。PNX_BSP_SOURCE_DIR 默认留空，显式覆盖时指向包含 target.cmake 的板型目录；PNX_PARAMS_OVERRIDE 与 PNX_ROBOT_CONFIG_OVERRIDE 属于开发验证入口。BSP 私有 src/ 包含目录仅对 BSP 源码和生成绑定开放。
+
+### 双板实现边界
+
+bsp/h723_dmmc02 与 bsp/f407_cboard 下按 can、spi、usart、gpio、pwm、pwm_failsafe、exti、dwt、usb 和 bsp（DMA buffer）细分；H723 另有 adc。target.cmake 仅声明实现适用的家族；产品选择和配置仍位于 configs。构建只包含当前板的源码和头。
+
+F407 bxCAN 采用历史 c147b1d 的 CAN1/CAN2 过滤器分区和 HAL 操作，适配当前生成 binding、core::callback、restart 与错误信号量。标准/扩展标识符按配置过滤，拒绝远程帧、超长载荷及越界 ID；一次 IRQ 最多处理三个 FIFO 槽位。消费者通过 restart 显式恢复，ISR 不等待恢复。当前 IOC 未开启 SCE IRQ，错误中断完整路径需硬件核验。
+
+其他外设沿用当前资源和接口模型，F407 SPI 移除无 D-cache 芯片不需要的维护路径。公共头保持一致；逻辑相同的实现按用户要求保留在各板型目录，修改共享契约时同时核对两板。旧 flash/indicator/diagnostics 无当前有效消费者，不恢复旧框架；GPIO 指示灯使用生成固定绑定。F407 ADC 和 H7 FDCAN 诊断不在本次支持范围，启用时根构建拒绝。
 
 ## 启动与资源生命周期
 
@@ -82,7 +90,7 @@ PNX_BOARD 不切换 BSP Git 分支。PNX_BSP_SOURCE_DIR 指定匹配工作树；
 
 推荐接收路径是有界捕获/通知 → 协议所有者组帧、校验与解码 → 一致状态 → 控制计算与提交。这是新链路设计原则，不声称现有所有驱动已转为线程解析。当前电机反馈仍由 CAN 接收路径更新。
 
-上下文以具体 API 为准：[UART](../../bsp/usart/include/bsp_usart.hpp) 回调位于 HAL 中断/DMA 路径，不得阻塞；[USB](../../bsp/usb/include/bsp_usb.hpp) RX/TX 结果回调分别在读/写线程运行。USB RX 字节只在回调期间有效，异步转交前须复制；CDC 字节块不代表完整协议帧。通用回调是非拥有引用，目标生命周期由使用者保证。
+上下文以具体 API 为准：[UART](../../bsp/h723_dmmc02/usart/include/bsp_usart.hpp) 回调位于 HAL 中断/DMA 路径，不得阻塞；[USB](../../bsp/h723_dmmc02/usb/include/bsp_usb.hpp) RX/TX 结果回调分别在读/写线程运行。USB RX 字节只在回调期间有效，异步转交前须复制；CDC 字节块不代表完整协议帧。通用回调是非拥有引用，目标生命周期由使用者保证。绑定空对象返回无效 callback，调用前由消费者检查有效性。
 
 **目标设计：** 跨上下文边界明确单写者、读取一致性与失效判定。按真实上下文选择临界区、互斥或拷贝交接；volatile 本身不保证一致快照。不为统一外观预置 SeqLock 或另一套消息框架。
 
@@ -91,6 +99,8 @@ PNX_BOARD 不切换 BSP Git 分支。PNX_BSP_SOURCE_DIR 指定匹配工作树；
 推荐应用链路：采样/反馈 → 状态估计 → 目标仲裁 → 控制计算 → 命令校验 → 执行器提交 → 状态观测。每一步明确单位、坐标系、有效期与所有者，坐标转换在显式边界完成。
 
 **当前实现：** [IMU 状态](../../devices/imu/imu/include/imu.hpp) 带 sequence、received_tick、online，AHRS 发布时填入对应元数据。[电机 API](../../devices/motors/motor/include/motor.hpp) 的 get_feedback() 在临界区内按值复制反馈，并提供命令/模式检查；[motor_service](../../devices/motors/motor/include/motorservice.hpp) 负责启动、停止和控制报文提交。start() 可能等待 DM 使能超时总和，不能作为控制周期中的无等待操作。
+
+PID 使用 position 或 delta 基础模式，通过类型安全的 `|` 组合选项；选项不屏蔽基础微分，derivative_on_measurement 显式覆盖微分来源。delta 保留现有 `kd * velocity` 语义；derivative_incomplete 仍为未实现枚举，不作为可用功能。referee 默认线程优先级读取生成的 params，而非重复硬编码。
 
 一致快照不代表足够新，命令本地接受不代表已发送，send_control() 的提交结果不代表电机完成预期运动。USB try_send() 的 ok 同样只表示排队。反馈有效性须结合接收元数据、应用期限和设备状态判断。
 
@@ -116,7 +126,7 @@ PNX_BOARD 不切换 BSP Git 分支。PNX_BSP_SOURCE_DIR 指定匹配工作树；
 
 | 顺序 | 工作与完成条件 |
 | --- | --- |
-| 1. 剩余启动接入 | 配置、根构建及 H723 链接已接通；F4 BSP 和两板 app_start 钩子仍待独立完成，不能由链接结果推断启动已完成 |
+| 1. 剩余启动接入 | 两板配置、BSP 与根构建已接通；两板 app_start 钩子仍待独立完成，不能由链接结果推断启动已完成 |
 | 2. 初始化失败验证 | 针对 AHRS/设备创建失败与重试检查资源状态、错误返回和安全输出，不将现有清理分支当作测试结论 |
 | 3. 数据与时间边界 | 保留已有反馈元数据，按实际消费者定义年龄上限；检查阻塞路径；仅在确有需求时增加独立有界事件或样本流 |
 | 4. 产品控制应用 | 定义任务、目标有效期、仲裁与失联输出，再测量截止时间、栈和 DMA 预算，不提前引入通用控制框架 |
