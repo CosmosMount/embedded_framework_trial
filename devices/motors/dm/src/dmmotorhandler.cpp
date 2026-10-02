@@ -25,7 +25,7 @@ types::status dmmotorhandler::register_motor(motor& device) noexcept
     if (bus_status != types::status::ok) return bus_status;
 
     const uint8_t bus = static_cast<uint8_t>(dm.can_bus());
-    const uint8_t slot = static_cast<uint8_t>(dm.can_id() - dm_id_base);
+    const uint16_t slot = static_cast<uint16_t>(dm.can_id() - dm_id_base);
     if (motor_list_[bus][slot] && motor_list_[bus][slot] != &dm) return types::status::busy;
     motor_list_[bus][slot] = &dm;
 
@@ -43,7 +43,7 @@ types::status dmmotorhandler::start() noexcept
                 device->enable_timeout_ticks == 0 || device->enable_timeout_ticks > 0x7fffffffU))
                 return types::status::invalid_arg;
     dmmotor* attempted[bsp::can::bus_count * dm_max_motors]{};
-    unsigned count = 0;
+    uint32_t count = 0;
     for (auto& row : motor_list_)
     {
         for (dmmotor* device : row)
@@ -87,13 +87,8 @@ void dmmotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& fr
         return;
     }
 
-    const int slot = static_cast<int>(frame.id - dm_master_id_base);
-    if (slot < 0 || slot >= dm_max_motors)
-    {
-        return;
-    }
-
-    dmmotor* m = motor_list_[static_cast<uint8_t>(bus)][static_cast<uint8_t>(slot)];
+    const uint16_t slot = static_cast<uint16_t>(frame.id - dm_master_id_base);
+    dmmotor* m = motor_list_[static_cast<uint8_t>(bus)][slot];
     if (m != nullptr)
     {
         m->parse_feedback(frame.data, frame.len);
@@ -125,7 +120,7 @@ types::status dmmotorhandler::enable_block(dmmotor* device)
             if (error != dmmotor::error::disable) return types::status::error;
         }
         if (static_cast<ULONG>(tx_time_get() - started) >= device->enable_timeout_ticks)
-            return types::status::error;
+            return types::status::timeout;
         if (tx_thread_sleep(1) != TX_SUCCESS) return types::status::invalid_arg;
     }
 }

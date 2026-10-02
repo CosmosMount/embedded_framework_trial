@@ -62,7 +62,6 @@ types::status lkmotor::set_output()
     if (control_mode == mode::relax)
     {
         cmd.current = 0;
-        return types::status::ok;
     }
     return types::status::ok;
 }

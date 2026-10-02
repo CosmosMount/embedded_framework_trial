@@ -23,10 +23,13 @@ class CoreTests(unittest.TestCase):
         params["remoter"] = {"source": "vt03_dr16"}
         params["bindings"]["referee_uart"] = "uart7"
         (root / "params.json").write_text(json.dumps(params), encoding="utf-8")
+        robot = json.loads((ROOT / "configs/boards/h723_dmmc02/robot.json").read_text())
+        robot["devices"]["motors"]["dm"]["max_motors"] = 257
+        (root / "robot.json").write_text(json.dumps(robot), encoding="utf-8")
         profile = ROOT / "configs/boards/h723_dmmc02"
         generation = subprocess.run([
             "cmake", f"-DIOC={profile}/h723_dmmc02.ioc", f"-DBOARD_CONFIG={profile}/board.json",
-            f"-DPARAMS={root}/params.json", f"-DROBOT_CONFIG={profile}/robot.json",
+            f"-DPARAMS={root}/params.json", f"-DROBOT_CONFIG={root}/robot.json",
             "-DPNX_BOARD_FAMILY=stm32h7", f"-DOUT_DIR={root}/generated",
             "-P", str(ROOT / "configs/cmake/generate_config.cmake"),
         ], text=True, capture_output=True)

@@ -16,6 +16,8 @@
 
 namespace
 {
+bool allow_wait = false;
+ULONG motor_tick = 0;
 void require(bool condition, const char* message)
 {
     if (!condition) throw std::runtime_error(message);
@@ -149,6 +151,18 @@ void test_motors()
     feedback.data[1] = 1;
     for (auto callback : callbacks[0]) callback(bus, feedback);
     require(device.alive == 1, "DJI registered receive dispatch");
+    dji_config.can_id = 0x20b;
+    gm6020 final_slot(dji_config);
+    require(dji.register_motor(final_slot) == types::status::ok, "DJI last feedback slot");
+    feedback.id = 0x20b;
+    for (auto callback : callbacks[0]) callback(bus, feedback);
+    require(final_slot.alive == 1, "DJI dispatch includes last slot");
+    for (uint32_t id : {0x200U, 0x20cU, UINT32_MAX})
+    {
+        feedback.id = id;
+        for (auto callback : callbacks[0]) callback(bus, feedback);
+    }
+    require(device.alive == 1 && final_slot.alive == 1, "DJI rejects feedback outside its range");
     sent.clear();
     protocol_settings options{};
     options.lk_broadcast = true;
@@ -168,12 +182,28 @@ void test_motors()
     transmit_status = types::status::busy;
     require(dji.send_control() == types::status::busy && lk.send_control() == types::status::busy,
             "CAN failures must propagate");
+    motors::config dm_config{};
+    dm_config.can_bus = bus;
+    dm_config.can_id = dm_id_base + 256;
+    dm_config.enable_timeout_ticks = 2;
+    dm4310 high_slot(dm_config);
+    dm_config.can_id = dm_id_base;
+    dm4310 first_slot(dm_config);
+    require(dm.register_motor(high_slot) == types::status::ok &&
+            dm.register_motor(first_slot) == types::status::ok, "DM slots above 255 do not alias slot zero");
+    feedback.id = dm_master_id_base + 256;
+    for (auto callback : callbacks[0]) callback(bus, feedback);
+    require(high_slot.alive == 1 && first_slot.alive == 0, "DM feedback dispatch preserves full slot");
+    transmit_status = types::status::ok;
+    allow_wait = true;
+    require(dm.enable_block(&first_slot) == types::status::timeout && first_slot.enablefailed,
+            "enable handshake timeout is explicit");
 }
 } // namespace
 
 TX_THREAD* tx_thread_identify() { static TX_THREAD thread; return &thread; }
-ULONG tx_time_get() { throw std::runtime_error("unexpected RTOS timing dependency"); }
-UINT tx_thread_sleep(ULONG) { throw std::runtime_error("unexpected RTOS wait"); }
+ULONG tx_time_get() { if (allow_wait) return motor_tick; throw std::runtime_error("unexpected RTOS timing dependency"); }
+UINT tx_thread_sleep(ULONG ticks) { if (allow_wait) { motor_tick += ticks; return TX_SUCCESS; } throw std::runtime_error("unexpected RTOS wait"); }
 namespace bsp::can
 {
 types::status init(bus) { return types::status::ok; }

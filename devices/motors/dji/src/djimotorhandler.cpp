@@ -74,13 +74,8 @@ void djimotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& f
         return;
     }
 
-    const int slot = static_cast<int>(frame.id - 0x201);
-    if (slot < 0 || slot >= 11)
-    {
-        return;
-    }
-
-    djimotor* m = motor_list_[static_cast<uint8_t>(bus)][static_cast<uint8_t>(slot)];
+    const uint8_t slot = static_cast<uint8_t>(frame.id - 0x201);
+    djimotor* m = motor_list_[static_cast<uint8_t>(bus)][slot];
     if (m != nullptr)
     {
         m->parse_feedback(frame.data, frame.len);

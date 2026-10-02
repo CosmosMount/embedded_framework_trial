@@ -4,7 +4,6 @@
 #include "motorhandler.hpp"
 
 #include <stdint.h>
-#include <cstring>
 
 namespace motors
 {
