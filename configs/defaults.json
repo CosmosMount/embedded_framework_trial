@@ -3,6 +3,10 @@
     "build": {
       "usbx": false
     },
+    "logging": {
+      "capacity": 64,
+      "level": "info"
+    },
     "motor_start": {
       "enable_timeout_ticks": 1000
     },

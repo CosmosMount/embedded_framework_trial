@@ -245,6 +245,14 @@ SECTIONS
   PROVIDE( __bss_start = __tbss_start );
   PROVIDE( __bss_size = __bss_end - __bss_start );
 
+  /* Retained debugger log. Preserved across software/watchdog reset. */
+  .noinit (NOLOAD) : ALIGN(32)
+  {
+    *(.noinit)
+    *(.noinit.*)
+    . = ALIGN(32);
+  } >RAM
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack (NOLOAD) :
   {

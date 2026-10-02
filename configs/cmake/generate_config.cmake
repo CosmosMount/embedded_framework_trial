@@ -1375,6 +1375,28 @@ endif()
 
 # --- params namespace (explicit keys per section) ---
 
+string(JSON params_log_capacity GET "${params_json}" logging capacity)
+string(JSON params_log_level GET "${params_json}" logging level)
+if(NOT params_log_capacity MATCHES "^[0-9]+$" OR
+   params_log_capacity LESS 1 OR params_log_capacity GREATER 255)
+    message(FATAL_ERROR "logging.capacity must be an integer in [1, 255]")
+endif()
+string(TOLOWER "${params_log_level}" params_log_level)
+if(params_log_level STREQUAL "error")
+    set(params_log_level_value 1)
+elseif(params_log_level STREQUAL "warning" OR params_log_level STREQUAL "warn")
+    set(params_log_level_value 2)
+elseif(params_log_level STREQUAL "info")
+    set(params_log_level_value 3)
+elseif(params_log_level STREQUAL "debug")
+    set(params_log_level_value 4)
+else()
+    message(FATAL_ERROR "logging.level must be error, warning, info, or debug")
+endif()
+string(CONCAT params_logging_body
+    "inline constexpr uint8_t default_level = ${params_log_level_value}U${generated_semicolon_token}\n"
+    "inline constexpr uint16_t capacity = ${params_log_capacity}U${generated_semicolon_token}\n")
+
 
 set(PNX_HAS_REMOTER_PARAMS 0)
 if(ENABLE_DR16 OR ENABLE_VT03 OR ENABLE_PS2 OR ENABLE_PS2_UART)
@@ -1706,6 +1728,7 @@ _pnx_write_generated("${CONFIG_HPP}"
 "${board_device_binding_body}"
 "} // namespace board::device\n\n"
 "namespace params::motors {\n${params_motor_body}}\n\n"
+"namespace params::logging {\n${params_logging_body}} // namespace params::logging\n\n"
 "namespace params::ahrs {\n"
 "${params_ahrs_body}"
 "} // namespace params::ahrs\n\n"

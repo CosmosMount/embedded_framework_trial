@@ -52,6 +52,7 @@
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
+extern void app_start(void);
 
 /* USER CODE END PFP */
 
@@ -68,6 +69,7 @@ UINT App_ThreadX_Init(VOID *memory_ptr)
   /* USER CODE END App_ThreadX_MEM_POOL */
 
   /* USER CODE BEGIN App_ThreadX_Init */
+  app_start();
 
   /* USER CODE END App_ThreadX_Init */
 
