@@ -19,9 +19,9 @@
 
 ## 参数如何生效
 
-`defaults.common` → `defaults.boards.<板型>` → `params.json`，后者优先，嵌套对象递归合并。`defaults.recommendations` 不参与这一合并。省略参数表示继承，不能把删除覆盖项理解为禁用功能；设备启用应按 `robot.json` 的实际字段配置。
+`defaults.common` → `defaults.boards.<板型>` → `params.json`，后者优先，嵌套对象递归合并。`defaults.recommendations` 不参与这一合并。省略参数表示继承，不能把删除覆盖项理解为禁用功能。设备组合按 `robot.json` 配置，遥控来源和 USBX 等功能按对应 params 字段选择；这些选择决定编译与绑定，应用仍须调用初始化入口。
 
-目前 H723 的 params 只保留 UART 别名与 CAN ID 类型；F407 还覆盖 USBX 启用。AHRS、温控等与默认值一致的覆盖已经移除，有效生成结果保持不变。确需调整时，从 defaults 找到同名字段写入该板 params，避免复制完整默认表。
+只写与默认值不同的字段。需要调整时，从 defaults 找到同名字段写入板型 params，避免复制完整默认表。
 
 `*_ticks` 使用 ThreadX tick，不等于毫秒；`*_ms` 为毫秒；温控目标使用摄氏度，duty 字段为占空比。具体物理量、协议 raw 值及合法范围以生成器检查和消费端接口为准，不把所有数值统一当作 SI 原始输入。线程优先级数值越小优先级越高；调整时检查整条任务链。
 
@@ -41,11 +41,11 @@ cmake -DPNX_BOARD=h723_dmmc02 -DPNX_EDITOR_OUTPUT=build/config-preview/editor.js
 
 ## 从 IOC 重新生成
 
-IOC 权威源位于 `configs/boards/<板型>/`。预览命令输出的 `cubemx.script` 使用绝对 IOC 路径及显式 `project path`，将工程输出定向到仓库根的 `boards/<板型>/`。先查看该脚本，再按本机 CubeMX 的脚本模式执行；本任务未调用 CubeMX 验证重生成。命令语义见 [ST 官方 CLI 文档](https://dev.st.com/stm32cube-docs/stm32cubemx/6.18.0/en/docs/markup/CubeMX_CLI.html)。
+IOC 权威源位于 `configs/boards/<板型>/`。预览命令输出的 `cubemx.script` 使用绝对 IOC 路径及显式 `project path`，将工程输出定向到仓库根的 `boards/<板型>/`。先查看该脚本，再按本机 CubeMX 的脚本模式执行；预览成功不代表 CubeMX 重生成已通过验证。命令语义见 [ST 官方 CLI 文档](https://dev.st.com/stm32cube-docs/stm32cubemx/6.18.0/en/docs/markup/CubeMX_CLI.html)。
 
 使用 GUI 时同样显式设置生成目录，不能直接接受迁移 IOC 后的默认目录。CubeMX 若在输出目录生成 IOC 副本，它是派生产物；硬件修改须回到 configs 中的权威源。生成的板工程自带 CMake/preset/链接文件属于 CubeMX 产物，PnX 根构建不读取它们的产品配置，只接入 `cmake/stm32cubemx` 的源码目标。
 
-`memory.ld` 起始于本次 CubeMX 生成的内存布局；H723 额外定义现有 BSP 要求的、位于 RAM_D1 的对齐 DMA 段及起止符号。以后修改 IOC 内存/堆栈设置时，需要明确审查并同步本文件；不在 Configure 时静默覆盖产品链接策略。
+`memory.ld` 管理产品链接布局；H723 额外定义现有 BSP 要求的、位于 RAM_D1 的对齐 DMA 段及起止符号。以后修改 IOC 内存/堆栈设置时，需要明确审查并同步本文件；不在 Configure 时静默覆盖产品链接策略。
 
 ## 构建固件
 
@@ -54,15 +54,17 @@ cmake --preset h723-debug
 cmake --build --preset h723-debug
 ```
 
-要求 `boards/<板型>/` 下已生成的 CubeMX 工程、Arm GNU Toolchain 和 Ninja。实际产品工具链为 `cmake/gcc-arm-none-eabi.cmake`，由当前配置选择 CPU/FPU 和 memory.ld，不加载 boards 下的工具链。F407 使用 `f407-debug`，自动选择 `bsp/f407_cboard/`；H723 对应 `bsp/h723_dmmc02/`。`PNX_BSP_SOURCE_DIR` 默认留空，仅开发外部 BSP 时覆盖。旧缓存曾保存平铺 BSP 路径，迁移时使用 `cmake --fresh --preset h723-debug` 清除该路径。Release 使用同板型的 release preset。
+要求 `boards/<板型>/` 下已生成的 CubeMX 工程、Arm GNU Toolchain 和 Ninja。实际产品工具链为 `cmake/gcc-arm-none-eabi.cmake`，由当前配置选择 CPU/FPU 和 memory.ld，不加载 boards 下的工具链。F407 使用 `f407-debug`，自动选择 `bsp/f407_cboard/`；H723 对应 `bsp/h723_dmmc02/`。`PNX_BSP_SOURCE_DIR` 默认留空，仅开发外部 BSP 时覆盖。Release 使用同板型的 release preset。
 
-固件输出为 `build/<preset>/pnx_embedded.elf`。根工程的高级覆盖参数 `PNX_PARAMS_OVERRIDE`、`PNX_ROBOT_CONFIG_OVERRIDE` 用于显式验证，常规配置仍修改本目录；不同板型须使用不同构建目录。旧缓存可能保存旧工具链路径，迁移后使用新的构建目录，勿沿用旧选择器。
+固件输出为 `build/<preset>/pnx_embedded.elf`。根工程的高级覆盖参数 `PNX_PARAMS_OVERRIDE`、`PNX_ROBOT_CONFIG_OVERRIDE` 用于显式验证，常规配置仍修改本目录；不同板型须使用不同构建目录。修改板型或工具链后使用新的构建目录，避免复用不匹配的缓存。
 
 最低版本升级源于 [CMake 3.23 的 preset include 支持](https://cmake.org/cmake/help/v3.23/manual/cmake-presets.7.html)。配置生成、固件链接、启动钩子和硬件运行是不同验收层级，当前限制见 [SPEC](../.agents/docs/SPEC.md)。
 
-## 维护脚本
+## 独立采样与温控
 
-BMI088 的采样由 DRDY 驱动；温控独立运行，周期由 `common.bmi088.temp_control_period_ticks` 指定，线程优先级分别使用 `common.ahrs.imu_thread_priority` 和 `common.ahrs.temp_thread_priority`。SPI 事务锁最多等待 `common.bmi088.spi_lock_wait_ticks`；这些时间单位都是 ThreadX tick，不是毫秒。修改温控周期时须核对板上 tick 频率。PWM 超时关断扩展已移除，任务停顿或调试暂停不会再由该机制自动关断加热。两个线程不会因配置整理而合并。
+在板型 params 中通过 `bmi088.temp_control_period_ticks` 设置温控周期，通过 `ahrs.imu_thread_priority`、`ahrs.temp_thread_priority` 分别设置优先级。采样由 DRDY 驱动，SPI 锁等待使用 `bmi088.spi_lock_wait_ticks`。默认值位于 defaults 的 common 节；覆盖时不要在 params 再嵌套 common。时间单位为 ThreadX tick，修改周期前核对板上 tick 频率。独立调度及保护边界见 [SPEC](../.agents/docs/SPEC.md#分层单位与调度)。
+
+## 维护脚本
 
 - `cmake/load_board.cmake`：发现并校验配置身份，集中解析本目录路径；不读取 boards 产物。
 - `cmake/configure.cmake`：独立预览入口及 CubeMX 输出脚本。
@@ -77,10 +79,20 @@ BMI088 的采样由 DRDY 驱动；温控独立运行，周期由 `common.bmi088.
 
 在板型 `params.json` 设置 `"remoter": {"source": "vt03_dr16"}`，同时启用两路接收。`bindings.vt03_uart` 连接 VT03，`bindings.remoter_uart` 连接 DR16，两者须有 RX DMA 且使用不同串口。端口可分别更换，无需修改接收器 C++；引脚、波特率、校验位和 DMA 仍由同目录 IOC 配置并重新生成。当前两板示例中 VT03 与裁判指向同一端口，启用前必须按真实接线分配独立串口；不使用裁判时可显式设置 `bindings.referee_uart: "none"`。生成器拒绝已启用接收器之间的冲突。
 
-VT03 有效时优先使用它的整套输入，失联后使用有效的 DR16；VT03 恢复后自动切回。`remoter.offline_timeout_ticks` 是最后有效帧的最大年龄，超过才失效，单位为 ThreadX tick。两路都失效时输出离线并归零。频道重复发布不会刷新有效帧时间，切换不混合摇杆与键鼠；具体验收规则见 [SPEC](../.agents/docs/SPEC.md)。
+VT03 有效时优先使用它的整套输入，失联后使用有效的 DR16；VT03 恢复后自动切回。`remoter.rx_timeout_ticks` 控制 DR16 空闲接收恢复；它与 `remoter.offline_timeout_ticks` 均要求整数 1～2147483647。后者是最后有效帧的最大年龄，超过才失效，单位为 ThreadX tick。两路都失效时输出离线并归零。频道重复发布不会刷新有效帧时间，切换不混合摇杆与键鼠；具体验收规则见 [SPEC](../.agents/docs/SPEC.md)。
 
 单源 `dr16`、`vt03`、`ps2` 与 `none` 仍可选。PS2 保留独立轮询线程；DR16/VT03 双串口模式只使用一个遥控线程：回调复制最新帧及接收时间，线程每 tick 取帧、解码、选择并发布，不在中断中进行浮点解码或发布消息。帧邮箱采用 latest 语义，同一周期多帧可覆盖，不承诺保留所有短按事件。DR16 原有空闲接收重启由该线程执行，HAL 停启的异常耗时需纳入板上周期验证。同步 PS2 的模块入口统一为 gamepad；串口 PS2 已删除，不再提供串口接收模式。
 
-LED 参数位于 params 的 led 节：spi_timeout_ms 为每次 SPI 操作超时（毫秒），brightness 为 0～255 的颜色通道值，blink_half_period_calls 为 blink() 的半周期调用次数（1～32767），不代表 RTOS tick。默认值统一见 defaults.json。LED 操作返回实际状态，失败不会推进 toggle/blink 的逻辑状态；GPIO 指示灯仍直接使用对应 BSP。
+## LED 与 UI
+
+LED 参数位于 `params.led`，默认值见 `defaults.json`：
+
+| 字段 | 单位与范围 |
+| --- | --- |
+| `spi_timeout_ms` | 每次 SPI 操作超时，毫秒 |
+| `brightness` | 颜色通道值，0～255 |
+| `blink_half_period_calls` | `blink()` 的半周期调用次数，1～32767；不是 RTOS tick |
+
+LED 操作返回实际状态，失败不会推进 `toggle()`/`blink()` 的逻辑状态；GPIO 指示灯直接使用对应 BSP。
 
 UI 的单次串口提交超时由 params.ui.uart_timeout_ms 配置（毫秒）。update() 每次最多提交一个字符帧或一组普通图元；发送失败保留待更新/删除状态，后续调用可重发。ok 仅表示本地串口接受，不代表裁判客户端已显示；UI 字符串借用调用方存储，必须保持有效。

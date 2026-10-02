@@ -237,7 +237,7 @@ if(PNX_BOARD_FAMILY STREQUAL "stm32f4")
     # Preserve F4 stack checking consistently in ThreadX and its consumers.
     target_compile_definitions(stm32cubemx INTERFACE TX_ENABLE_STACK_CHECKING)
 endif()
-# CubeMX owns ThreadX startup; app_start integration remains a separate task.
+# CubeMX owns ThreadX startup and calls the product app_start hook.
 include("${PNX_EMBEDDED_CONFIG_DIR}/cmake/usbx_integration.cmake")
 
 target_sources(${PROJECT_NAME} PRIVATE
