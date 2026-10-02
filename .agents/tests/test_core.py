@@ -193,7 +193,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_remote_protocols(self):
-        self.compile_and_run_device("remotes", "modules/remoter/src/remoter.cpp", *(f"devices/remotes/src/{name}.cpp"
+        self.compile_and_run_device("remotes", "modules/remoter/src/remoter.cpp", "libs/crc/src/crc.cpp", *(f"devices/remotes/src/{name}.cpp"
             for name in ("ps2", "dr16", "vt03")))
 
     def test_pid_modes(self):

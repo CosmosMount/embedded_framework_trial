@@ -1,4 +1,5 @@
 #include "remote_protocols.hpp"
+#include "crc.hpp"
 #include <cstring>
 
 namespace remotes::vt03
@@ -34,19 +35,10 @@ struct vt03_frame
 } __attribute__((packed));
 
 
-sw_state map_vt03_mode(uint8_t raw)
+bool valid_channel(uint16_t raw)
 {
-    switch (raw)
-    {
-    case 0:
-        return sw_state::low;
-    case 1:
-        return sw_state::mid;
-    case 2:
-        return sw_state::up;
-    default:
-        return sw_state::low;
-    }
+    return raw >= rc_ch_value_offset - rc_ch_offset_max &&
+           raw <= rc_ch_value_offset + rc_ch_offset_max;
 }
 
 }
@@ -54,12 +46,18 @@ sw_state map_vt03_mode(uint8_t raw)
 types::status decode(const uint8_t* bytes, uint16_t size, remotes::reading& out)
 {
     if (bytes == nullptr || size != frame_size) return types::status::invalid_arg;
+    if (!crc::verify_crc16_checksum(bytes, size)) return types::status::error;
     vt03_frame frame{};
     static_assert(sizeof(frame) == frame_size);
     std::memcpy(&frame, bytes, sizeof(frame));
     if (frame.sof_1 != 0xA9 || frame.sof_2 != 0x53) return types::status::error;
+    if (!valid_channel(frame.ch_0) || !valid_channel(frame.ch_1) ||
+        !valid_channel(frame.ch_2) || !valid_channel(frame.ch_3) ||
+        !valid_channel(frame.wheel) || frame.mode_sw > 2 ||
+        frame.mouse_left > 1 || frame.mouse_right > 1 || frame.mouse_middle > 1)
+        return types::status::error;
     remotes::reading decoded{};
-    decoded.left_sw = map_vt03_mode(static_cast<uint8_t>(frame.mode_sw));
+    decoded.left_sw = static_cast<sw_state>(frame.mode_sw);
     decoded.right_x = (static_cast<float>(frame.ch_0) - static_cast<float>(rc_ch_value_offset)) /
                   static_cast<float>(rc_ch_offset_max);
     decoded.right_y = (static_cast<float>(frame.ch_1) - static_cast<float>(rc_ch_value_offset)) /

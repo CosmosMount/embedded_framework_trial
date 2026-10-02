@@ -30,7 +30,7 @@ types::status selector::init(const selector_config& cfg)
 
     cfg_ = cfg;
     initialization_status_ = types::status::busy;
-    auto result = msg::init(output_);
+    types::status result = msg::init(output_);
     if (result != types::status::ok)
         return initialization_status_ = result;
     if (tx_thread_create(&thread_, const_cast<CHAR*>("remoter"), thread_entry,
@@ -148,7 +148,7 @@ void selector::thread_entry(ULONG arg)
         remotes::reading sample{};
 #endif
 #if ENABLE_VT03
-        const auto vt03_size = self->vt03_frame_.take(frame, received_tick);
+        const uint8_t vt03_size = self->vt03_frame_.take(frame, received_tick);
         if (vt03_size != 0 && remotes::vt03::decode(frame, vt03_size, sample) == types::status::ok)
         {
             auto& input = inputs[0];
@@ -171,7 +171,7 @@ void selector::thread_entry(ULONG arg)
         }
 #endif
 #if ENABLE_DR16
-        const auto dr16_size = self->dr16_frame_.take(frame, received_tick);
+        const uint8_t dr16_size = self->dr16_frame_.take(frame, received_tick);
         if (dr16_size != 0 && remotes::dr16::decode(frame, dr16_size, sample) == types::status::ok)
         {
             auto& input = inputs[1];

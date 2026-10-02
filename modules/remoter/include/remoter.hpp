@@ -9,7 +9,6 @@
 #include "remote_state.hpp"
 #include "tx_api.h"
 
-#include <stddef.h>
 #include <stdint.h>
 
 namespace remoter
@@ -33,8 +32,6 @@ struct gamepad_state
     uint32_t poll_count = 0U;
     uint32_t valid_frame_count = 0U;
     uint32_t error_count = 0U;
-    uint32_t signal_count = 0U;
-    uint32_t last_signal_tick = 0U;
 };
 
 struct gamepad_config
@@ -98,7 +95,9 @@ private:
     pending_frame vt03_frame_{};
     bool vt03_owned_ = false;
 #endif
+#if ENABLE_PS2
     msg::subscriber ps2_sub_{};
+#endif
     types::status initialization_status_ = types::status::not_initialized;
 };
 

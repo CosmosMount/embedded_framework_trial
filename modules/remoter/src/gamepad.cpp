@@ -3,12 +3,6 @@
 
 namespace remoter
 {
-namespace
-{
-constexpr auto poll_period_ticks = params::ps2::poll_period_ticks;
-
-} // namespace
-
 gamepad& gamepad::instance()
 {
     static gamepad instance;
@@ -73,8 +67,6 @@ types::status gamepad::poll_once(gamepad_state& message)
     message.data = output;
     message.frame_valid = true;
     ++message.valid_frame_count;
-    ++message.signal_count;
-    message.last_signal_tick = output.received_tick;
     return types::status::ok;
 }
 
@@ -88,7 +80,7 @@ void gamepad::poll_thread_entry(ULONG arg)
     {
         self->poll_once(message);
         msg::publish(self->output_, message);
-        tx_thread_sleep(poll_period_ticks);
+        tx_thread_sleep(params::ps2::poll_period_ticks);
     }
 }
 

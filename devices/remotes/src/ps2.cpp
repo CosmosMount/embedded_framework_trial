@@ -6,11 +6,6 @@ namespace remotes::ps2
 {
 namespace
 {
-constexpr auto spi_timeout_ms = params::ps2::spi_timeout_ms;
-constexpr auto gpio_half_period_us = params::ps2::gpio_half_period_us;
-constexpr auto gpio_cs_setup_us = params::ps2::gpio_cs_setup_us;
-constexpr auto gpio_cs_hold_us = params::ps2::gpio_cs_hold_us;
-constexpr auto axis_deadzone = params::ps2::axis_deadzone;
 constexpr bool analog_id(uint8_t id)
 {
     return id == 0x53U || id == 0x73U;
@@ -27,7 +22,7 @@ constexpr float normalize_axis(uint8_t raw, uint8_t center)
 
 constexpr float apply_axis_deadzone(float value)
 {
-    return value > -axis_deadzone && value < axis_deadzone ? 0.0f : value;
+    return value > -params::ps2::axis_deadzone && value < params::ps2::axis_deadzone ? 0.0f : value;
 }
 
 } // namespace
@@ -65,7 +60,7 @@ types::status spi::transfer(const uint8_t* tx, uint8_t* rx, uint8_t size)
     types::status status = bsp::gpio::set_active(cs_, true);
     if (status == types::status::ok)
     {
-        status = bsp::spi::transmit_receive(spi_bus_, tx, rx, size, spi_timeout_ms);
+        status = bsp::spi::transmit_receive(spi_bus_, tx, rx, size, params::ps2::spi_timeout_ms);
     }
     const types::status release_status = bsp::gpio::set_active(cs_, false);
     return status == types::status::ok ? release_status : status;
@@ -93,13 +88,13 @@ types::status gpio::transfer_byte(uint8_t tx, uint8_t& rx)
         {
             return status;
         }
-        bsp::dwt::delay_us(gpio_half_period_us);
+        bsp::dwt::delay_us(params::ps2::gpio_half_period_us);
         status = bsp::gpio::write(clk_, false);
         if (status != types::status::ok)
         {
             return status;
         }
-        bsp::dwt::delay_us(gpio_half_period_us);
+        bsp::dwt::delay_us(params::ps2::gpio_half_period_us);
         bool data_high = false;
         status = bsp::gpio::read(data_, data_high);
         if (status != types::status::ok)
@@ -115,7 +110,7 @@ types::status gpio::transfer_byte(uint8_t tx, uint8_t& rx)
         {
             return status;
         }
-        bsp::dwt::delay_us(gpio_half_period_us);
+        bsp::dwt::delay_us(params::ps2::gpio_half_period_us);
     }
     return types::status::ok;
 }
@@ -129,12 +124,12 @@ types::status gpio::transfer(const uint8_t* tx, uint8_t* rx, uint8_t size)
     types::status status = bsp::gpio::set_active(cs_, true);
     if (status == types::status::ok)
     {
-        bsp::dwt::delay_us(gpio_cs_setup_us);
+        bsp::dwt::delay_us(params::ps2::gpio_cs_setup_us);
         for (uint8_t index = 0U; index < size && status == types::status::ok; ++index)
         {
             status = transfer_byte(tx[index], rx[index]);
         }
-        bsp::dwt::delay_us(gpio_cs_hold_us);
+        bsp::dwt::delay_us(params::ps2::gpio_cs_hold_us);
     }
     const types::status release_status = bsp::gpio::set_active(cs_, false);
     return status == types::status::ok ? release_status : status;

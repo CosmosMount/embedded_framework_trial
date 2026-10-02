@@ -1,4 +1,5 @@
 #include "ps2.hpp"
+#include "crc.hpp"
 #include "remote_protocols.hpp"
 #include "remote_state.hpp"
 #include "remoter.hpp"
@@ -60,7 +61,7 @@ uint32_t cycles = 0;
 remoter::state latest{};
 struct end_run {};
 uint8_t dr_frame[]{0x94,0x66,0x0b,0,1,0xd8,0xf4,0xff,0x14,0,0xfd,0xff,1,0,1,0,0,4};
-uint8_t vt_frame[]{0xa9,0x53,0x94,0x66,0x0b,0x5b,0x28,0x6d,1,0x18,0xf4,0xff,0x14,0,0xfd,0xff,1,1,0,0,0};
+uint8_t vt_frame[]{0xa9,0x53,0x94,0x66,0x0b,0x5b,0x28,0x6d,1,0x18,0xf4,0xff,0x14,0,0xfd,0xff,1,1,0,0x66,0xdc};
 void receive(bsp::usart::port port, uint8_t* bytes, uint16_t length)
 {
     in_rx = true;
@@ -97,6 +98,8 @@ UINT tx_thread_sleep(ULONG)
         clock_tick = 140;
         receive(app::uart::dr16, dr_frame, sizeof(dr_frame));
         uint8_t bad_vt[sizeof(vt_frame)]{};
+        std::memcpy(bad_vt, vt_frame, sizeof(bad_vt));
+        bad_vt[10] ^= 1; // Valid header/fields, damaged payload with stale CRC.
         receive(app::uart::vt03, bad_vt, sizeof(bad_vt));
     }
     else if (cycles == 3)
@@ -283,14 +286,48 @@ int main(int argc, char** argv)
                 reading.mouse_x==-12 && reading.mouse_z==-3 && reading.key.W, "DR16 switches and signed mouse");
         require(remotes::dr16::decode(dr16, sizeof(dr16)-1, reading)==status::invalid_arg && reading.right_x==1,
                 "DR16 truncated input preserves output");
-        uint8_t vt03[]{0xa9,0x53,0x94,0x66,0x0b,0x5b,0x28,0x6d,1,0x18,0xf4,0xff,0x14,0,0xfd,0xff,1,1,0,0,0};
+        uint8_t invalid_dr[sizeof(dr16)]{};
+        require(remotes::dr16::decode(invalid_dr, sizeof(invalid_dr), reading) == status::error,
+                "zero-filled DR16 cannot be accepted as live input");
+        std::memcpy(invalid_dr, dr16, sizeof(dr16));
+        invalid_dr[5] &= 0xcf;
+        require(remotes::dr16::decode(invalid_dr, sizeof(invalid_dr), reading) == status::error && reading.right_x == 1,
+                "DR16 invalid switch preserves output");
+        std::memcpy(invalid_dr, dr16, sizeof(dr16));
+        invalid_dr[12] = 2;
+        require(remotes::dr16::decode(invalid_dr, sizeof(invalid_dr), reading) == status::error,
+                "DR16 invalid mouse button rejected");
+        uint8_t vt03[]{0xa9,0x53,0x94,0x66,0x0b,0x5b,0x28,0x6d,1,0x18,0xf4,0xff,0x14,0,0xfd,0xff,1,1,0,0x66,0xdc};
         require(remotes::vt03::decode(vt03, sizeof(vt03), reading)==status::ok, "VT03 decode");
         require(reading.right_x==1 && reading.right_y==-1 && reading.left_x==1 && reading.left_y==-1,
                 "VT03 distinct left channel ordering");
         require(reading.fn_2 && !reading.fn_1 && reading.button && reading.pause &&
                 reading.left_sw==remotes::sw_state::up && reading.right_sw==remotes::sw_state::low,
                 "VT03 physical controls only; decoder does not synthesize shoot events");
+        vt03[10] ^= 1;
+        require(remotes::vt03::decode(vt03, sizeof(vt03), reading) == status::error && reading.mouse_x == -12,
+                "VT03 corrupt payload preserves output");
+        vt03[10] ^= 1;
+        vt03[19] ^= 1;
+        require(remotes::vt03::decode(vt03, sizeof(vt03), reading) == status::error,
+                "VT03 corrupt checksum rejected");
+        vt03[19] ^= 1;
+        vt03[7] |= 0x30;
+        crc::append_crc16_checksum(vt03, sizeof(vt03));
+        require(remotes::vt03::decode(vt03, sizeof(vt03), reading) == status::error && reading.left_x == 1,
+                "VT03 invalid mode is rejected instead of mapped to low");
+        vt03[7] &= 0xdf;
+        vt03[16] = 2;
+        crc::append_crc16_checksum(vt03, sizeof(vt03));
+        require(remotes::vt03::decode(vt03, sizeof(vt03), reading) == status::error,
+                "VT03 invalid mouse state is rejected");
+        vt03[16] = 1;
+        vt03[2] = 0; vt03[3] &= 0xf8;
+        crc::append_crc16_checksum(vt03, sizeof(vt03));
+        require(remotes::vt03::decode(vt03, sizeof(vt03), reading) == status::error && reading.right_x == 1,
+                "VT03 out-of-range channel preserves last valid output");
         vt03[0]=0;
+        crc::append_crc16_checksum(vt03, sizeof(vt03));
         require(remotes::vt03::decode(vt03,sizeof(vt03),reading)==status::error && reading.left_x==1,
                 "VT03 invalid header preserves output");
         transport device;

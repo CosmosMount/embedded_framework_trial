@@ -2,14 +2,15 @@
 #include "bsp_gpio.hpp"
 #include "bsp_spi.hpp"
 #include "usertypes.hpp"
-#include <stddef.h>
 #include <stdint.h>
 
 namespace remotes::ps2
 {
+inline constexpr uint8_t frame_size = 9U;
+
 struct frame
 {
-    uint8_t bytes[9]{};
+    uint8_t bytes[frame_size]{};
 };
 
 struct sample
@@ -22,7 +23,6 @@ struct sample
 };
 
 // Synchronous device operations; scheduling, button edges and publication belong to remoter.
-inline constexpr uint8_t frame_size = 9U;
 types::status decode(const frame& raw, sample& out) noexcept;
 
 template <typename Transport>

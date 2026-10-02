@@ -51,6 +51,8 @@ types::status decode(const uint8_t* bytes, uint16_t size, remotes::reading& out)
     dr16_frame frame{};
     static_assert(sizeof(frame) == frame_size);
     std::memcpy(&frame, bytes, sizeof(frame));
+    if (frame.s1 == 0 || frame.s2 == 0 || frame.mouse_left > 1 || frame.mouse_right > 1)
+        return types::status::error;
     remotes::reading decoded{};
     decoded.left_sw = map_switch(static_cast<uint8_t>(frame.s2));
     decoded.right_sw = map_switch(static_cast<uint8_t>(frame.s1));
