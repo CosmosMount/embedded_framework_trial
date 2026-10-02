@@ -33,3 +33,5 @@ ninja-build.ninja
 install_manifest.txt
 .agents/experiment-profile.json
 .agents/pipeline.json
+.agents/tests/
+.agents/plans/

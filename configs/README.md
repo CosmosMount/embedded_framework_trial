@@ -25,6 +25,8 @@
 
 `*_ticks` 使用 ThreadX tick，不等于毫秒；`*_ms` 为毫秒；温控目标使用摄氏度，duty 字段为占空比。具体物理量、协议 raw 值及合法范围以生成器检查和消费端接口为准，不把所有数值统一当作 SI 原始输入。线程优先级数值越小优先级越高；调整时检查整条任务链。
 
+`logging.capacity` 是保留 RAM 中的日志记录数，范围 1～255，每条固定占用 32 字节；另有少量状态字段。`logging.level` 可设为 `error`、`warning`、`info` 或 `debug`，低于指定严重程度的记录在写入前过滤。增加容量会直接占用对应板型 memory.ld 中的 `.noinit` RAM；日志不会写内部 Flash，也不提供断电保存。
+
 ## 无需板级代码的配置检查
 
 需要 CMake 3.23 或更高版本。以下命令不启动 CubeMX、不编译、不操作硬件：
@@ -35,7 +37,7 @@ cmake -DPNX_BOARD=f407_cboard -DOUT_DIR=build/config-preview/f407 -P configs/cma
 cmake -DPNX_BOARD=h723_dmmc02 -DPNX_EDITOR_OUTPUT=build/config-preview/editor.json -P configs/cmake/export_editor_context.cmake
 ```
 
-每次预览生成 `config.hpp`、`robot_config.hpp`、`bsp_bindings.hpp`、`bsp_bindings.cpp`，另输出 `cubemx.script`。编辑器 JSON 的 IOC、board、params、robot 路径全部指向本目录。生成器是配置有效性的最终裁定者，编辑器不自行维护另一套规则。遇到错误修正源 JSON/IOC 后重新运行，不修补生成文件。
+每次预览生成 `config.hpp`、`robot_config.hpp`、`module_bindings.hpp`、`bsp_bindings.cpp`，另输出 `cubemx.script`。编辑器 JSON 的 IOC、board、params、robot 路径全部指向本目录。生成器是配置有效性的最终裁定者，编辑器不自行维护另一套规则。遇到错误修正源 JSON/IOC 后重新运行，不修补生成文件。
 
 ## 从 IOC 重新生成
 
@@ -60,9 +62,25 @@ cmake --build --preset h723-debug
 
 ## 维护脚本
 
+BMI088 的采样由 DRDY 驱动；温控独立运行，周期由 `common.bmi088.temp_control_period_ticks` 指定，线程优先级分别使用 `common.ahrs.imu_thread_priority` 和 `common.ahrs.temp_thread_priority`。SPI 事务锁最多等待 `common.bmi088.spi_lock_wait_ticks`；这些时间单位都是 ThreadX tick，不是毫秒。修改温控周期时须核对板上 tick 频率。PWM 超时关断扩展已移除，任务停顿或调试暂停不会再由该机制自动关断加热。两个线程不会因配置整理而合并。
+
 - `cmake/load_board.cmake`：发现并校验配置身份，集中解析本目录路径；不读取 boards 产物。
 - `cmake/configure.cmake`：独立预览入口及 CubeMX 输出脚本。
 - `cmake/import_ioc.cmake`：只解析硬件事实。
 - `cmake/generate_config.cmake`：合并参数、校验资源/消费者、生成绑定。
 - `cmake/export_editor_context.cmake`：导出同一配置源的文件与可用资源。
 - `cmake/usbx_integration.cmake`：将产品 USBX 选择接入生成目标。
+
+遥控/裁判模块直接使用 BSP UART，默认逻辑端口的物理映射由 `bindings.remoter_uart`、`bindings.vt03_uart`、`bindings.referee_uart` 定义。PS2 的轮询周期、SPI 超时、GPIO 时序和死区集中在 `ps2` 参数段。生成器拒绝未实现的电机 `control_mode: multi`。
+
+## 遥控输入共存
+
+在板型 `params.json` 设置 `"remoter": {"source": "vt03_dr16"}`，同时启用两路接收。`bindings.vt03_uart` 连接 VT03，`bindings.remoter_uart` 连接 DR16，两者须有 RX DMA 且使用不同串口。端口可分别更换，无需修改接收器 C++；引脚、波特率、校验位和 DMA 仍由同目录 IOC 配置并重新生成。当前两板示例中 VT03 与裁判指向同一端口，启用前必须按真实接线分配独立串口；不使用裁判时可显式设置 `bindings.referee_uart: "none"`。生成器拒绝已启用接收器之间的冲突。
+
+VT03 有效时优先使用它的整套输入，失联后使用有效的 DR16；VT03 恢复后自动切回。`remoter.offline_timeout_ticks` 是最后有效帧的最大年龄，超过才失效，单位为 ThreadX tick。两路都失效时输出离线并归零。频道重复发布不会刷新有效帧时间，切换不混合摇杆与键鼠；具体验收规则见 [SPEC](../.agents/docs/SPEC.md)。
+
+单源 `dr16`、`vt03`、`ps2` 与 `none` 仍可选。PS2 保留独立轮询线程；DR16/VT03 双串口模式只使用一个遥控线程：回调复制最新帧及接收时间，线程每 tick 取帧、解码、选择并发布，不在中断中进行浮点解码或发布消息。帧邮箱采用 latest 语义，同一周期多帧可覆盖，不承诺保留所有短按事件。DR16 原有空闲接收重启由该线程执行，HAL 停启的异常耗时需纳入板上周期验证。同步 PS2 的模块入口统一为 gamepad；串口 PS2 已删除，不再提供串口接收模式。
+
+LED 参数位于 params 的 led 节：spi_timeout_ms 为每次 SPI 操作超时（毫秒），brightness 为 0～255 的颜色通道值，blink_half_period_calls 为 blink() 的半周期调用次数（1～32767），不代表 RTOS tick。默认值统一见 defaults.json。LED 操作返回实际状态，失败不会推进 toggle/blink 的逻辑状态；GPIO 指示灯仍直接使用对应 BSP。
+
+UI 的单次串口提交超时由 params.ui.uart_timeout_ms 配置（毫秒）。update() 每次最多提交一个字符帧或一组普通图元；发送失败保留待更新/删除状态，后续调用可重发。ok 仅表示本地串口接受，不代表裁判客户端已显示；UI 字符串借用调用方存储，必须保持有效。
