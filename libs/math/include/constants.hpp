@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cmath>
-#include <cstdint>
+#include <stdint.h>
 
 namespace math
 {

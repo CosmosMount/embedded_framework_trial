@@ -11,14 +11,13 @@ iir::iir(float omega_n, float zeta, float dt)
 
     b0_ = wn2 / den;
     b1_ = 2.0f * b0_;
-    b2_ = b0_;
     a1_ = -(2.0f * wn2 - 2.0f * k * k) / den;
     a2_ = -(k * k - 2.0f * zeta * omega_n * k + wn2) / den;
 }
 
-float iir::update(float input) const
+float iir::update(float input)
 {
-    const float output = b0_ * input + b1_ * x1_ + b2_ * x2_ + a1_ * y1_ + a2_ * y2_;
+    const float output = b0_ * input + b1_ * x1_ + b0_ * x2_ + a1_ * y1_ + a2_ * y2_;
     x2_ = x1_;
     x1_ = input;
     y2_ = y1_;

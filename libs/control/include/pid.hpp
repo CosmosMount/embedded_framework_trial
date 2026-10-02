@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace control
 {
@@ -14,7 +14,6 @@ enum class pid_mode : uint8_t
     integral_separation = 0x10,
     derivative_on_measurement = 0x20,
     integral_limit = 0x40,
-    derivative_incomplete = 0x80,
 };
 
 // Select one base mode (position/delta), then combine the desired options.
