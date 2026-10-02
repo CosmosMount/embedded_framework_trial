@@ -9,7 +9,14 @@
 namespace {
 using types::status;
 bsp::can::rx_callback receiver;
-uint8_t queue[16][8]{};
+uint8_t queue[16][16]{};
+unsigned queue_bytes = 0;
+void (*worker)(ULONG) = nullptr;
+ULONG worker_arg = 0;
+bool run_worker = false;
+struct end_run {};
+unsigned publications = 0;
+imu::state published{};
 unsigned head = 0, count = 0, replenish = 0;
 ULONG tick = 10;
 unsigned queue_creates = 0, semaphore_creates = 0, semaphore_deletes = 0;
@@ -35,23 +42,28 @@ namespace bsp::dwt { types::status init() { return status::ok; } uint64_t timeli
 ULONG tx_time_get() { return tick; }
 UINT tx_queue_create(TX_QUEUE*, CHAR*, UINT words, void*, ULONG) {
     ++queue_creates;
-    require(words * sizeof(ULONG) == 8, "queue payload size"); return TX_SUCCESS;
+    queue_bytes = words * sizeof(ULONG);
+    require(queue_bytes <= sizeof(queue[0]), "queue payload size"); return TX_SUCCESS;
 }
 UINT tx_queue_delete(TX_QUEUE*) { return TX_SUCCESS; }
 UINT tx_queue_send(TX_QUEUE*, void* data, ULONG) {
     if (count == 16) return TX_NOT_AVAILABLE;
-    std::memcpy(queue[(head + count++) % 16], data, 8); return TX_SUCCESS;
+    std::memcpy(queue[(head + count++) % 16], data, queue_bytes); return TX_SUCCESS;
 }
-UINT tx_queue_receive(TX_QUEUE*, void* data, ULONG) {
-    if (!count) return TX_NOT_AVAILABLE;
-    std::memcpy(data, queue[head], 8); head = (head + 1) % 16; --count;
+UINT tx_queue_receive(TX_QUEUE*, void* data, ULONG wait) {
+    if (!count) {
+        if (run_worker && wait != TX_NO_WAIT) throw end_run{};
+        return TX_NOT_AVAILABLE;
+    }
+    std::memcpy(data, queue[head], queue_bytes); head = (head + 1) % 16; --count;
     if (replenish) { --replenish; tx_queue_send(nullptr, data, TX_NO_WAIT); }
     return TX_SUCCESS;
 }
 UINT tx_semaphore_create(TX_SEMAPHORE*, CHAR*, ULONG) { ++semaphore_creates; return semaphore_result; }
 UINT tx_semaphore_delete(TX_SEMAPHORE*) { ++semaphore_deletes; return cleanup_result; }
 UINT tx_semaphore_put(TX_SEMAPHORE*) { return TX_SUCCESS; }
-UINT tx_thread_create(TX_THREAD*, CHAR*, void (*)(ULONG), ULONG, void*, ULONG, UINT, UINT, ULONG, UINT) {
+UINT tx_thread_create(TX_THREAD*, CHAR*, void (*entry)(ULONG), ULONG arg, void*, ULONG, UINT, UINT, ULONG, UINT) {
+    worker = entry; worker_arg = arg;
     ++thread_creates; return thread_result;
 }
 namespace msg::detail {
@@ -63,10 +75,32 @@ status deinitialize_topic(topic_layout& layout) noexcept {
     if (cleanup_result != TX_SUCCESS) return status::error;
     layout.initialized = false; return status::ok;
 }
-status publish(topic_layout&, const void*, size_t, publish_opts) noexcept { return status::ok; }
+status publish(topic_layout&, const void* value, size_t size, publish_opts) noexcept {
+    if (size == sizeof(published)) { std::memcpy(&published, value, size); ++publications; }
+    return status::ok;
+}
 }
 int main(int argc, char** argv) {
     try {
+        if (argc > 1 && (std::strcmp(argv[1], "stale_thread") == 0 ||
+                         std::strcmp(argv[1], "fresh_thread") == 0)) {
+            auto& reader = ahrs::dmimu_reader::instance();
+            imu::dmimu::config cfg{};
+            cfg.transport.can_bus = static_cast<bsp::can::bus>(0);
+            cfg.runtime.offline_timeout_ticks = 100;
+            require(reader.init(cfg) == status::ok, "reader initialization");
+            for (uint8_t id = 1; id <= 4; ++id) {
+                const uint8_t frame[8] = {id, 25, 0, 0, 0, 0, 0, 0};
+                receive(frame);
+            }
+            const bool fresh = std::strcmp(argv[1], "fresh_thread") == 0;
+            tick = fresh ? 15 : 150;
+            run_worker = true;
+            try { worker(worker_arg); } catch (const end_run&) {}
+            require(publications == (fresh ? 1U : 0U), "stale queued data is not published online");
+            if (fresh) require(published.online && published.received_tick == 10, "published reception time");
+            return 0;
+        }
         if (argc > 1) {
             if (std::strcmp(argv[1], "semaphore") == 0) semaphore_result = TX_NOT_AVAILABLE;
             if (std::strcmp(argv[1], "topic") == 0) topic_result = status::error;
@@ -87,6 +121,8 @@ int main(int argc, char** argv) {
         imu::dmimu device;
         imu::dmimu::config cfg{};
         cfg.transport.can_bus = static_cast<bsp::can::bus>(0);
+        cfg.runtime.offline_timeout_ticks = 100;
+        require(device.read_register(imu::dmimu::register_id::accel_data) == status::not_initialized, "command before initialization");
         require(device.initialize(cfg) == types::status::ok, "initialize");
         const uint8_t frames[][8] = {
             {4, 0, 0, 0, 0, 0, 0, 0},
@@ -112,11 +148,39 @@ int main(int argc, char** argv) {
                 require(std::abs(sample.quaternion[axis] - value) < 1e-6, "quaternion packed bits");
             }
             require(sample.temperature == temperatures[n], "integer Celsius temperature");
-            require(sample.sequence == n + 1 && sample.received_tick == tick, "snapshot metadata");
+            require(sample.sequence == n + 1 && sample.received_tick == tick - 1, "snapshot metadata");
             require(std::abs(sample.accel.x + 235.2f) < 1e-4f &&
                     std::abs(sample.accel.y - 235.2f) < 1e-4f, "adjacent acceleration bytes");
             require(!device.take_snapshot(sample), "snapshot consumed once");
         }
+        const uint8_t accel[8] = {1,25,0,0,0,0,0,0};
+        const uint8_t gyro[8] = {2,0,0,0,0,0,0,0};
+        const uint8_t euler[8] = {3,0,0,0,0,0,0,0};
+        const uint8_t quaternion[8] = {4,0,0,0,0,0,0,0};
+        tick = 20;
+        receive(accel); receive(gyro); receive(euler); receive(quaternion);
+        tick = 121;
+        device.process_pending();
+        imu::dmimu::snapshot sample{};
+        require(device.take_snapshot(sample) && sample.received_tick == 20, "delayed decoding preserves age");
+        require(!device.audit_online(), "stale completed cycle is offline");
+        tick = 122;
+        receive(accel); device.process_pending();
+        tick = 223;
+        receive(gyro); receive(euler); receive(quaternion); device.process_pending();
+        require(!device.take_snapshot(sample), "expired partial cycle cannot mix with new frames");
+        receive(accel); device.process_pending();
+        require(device.take_snapshot(sample) && sample.received_tick == 223 && sample.sequence == 6,
+                "recovery completes a fresh cycle with monotonic sequence");
+        require(device.audit_online(), "fresh recovered cycle is online");
+        tick = UINT32_MAX - 2U;
+        receive(accel); receive(gyro); receive(euler);
+        tick = 3;
+        receive(quaternion); device.process_pending();
+        require(device.take_snapshot(sample) && sample.received_tick == UINT32_MAX - 2U && device.online(),
+                "cycle timestamp survives tick wrap");
+        tick = 99;
+        require(!device.audit_online(), "wrapped cycle expires");
         const uint8_t incoming[8] = {1,25,0,0,0,0,0,0};
         receive(incoming); replenish = 64;
         require(device.process_pending() == 16, "continuous input must have a finite batch");

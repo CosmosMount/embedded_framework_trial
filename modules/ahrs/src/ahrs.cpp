@@ -691,7 +691,7 @@ void dmimu_reader::thread_entry(ULONG arg)
         self->telemetry_.snapshot_received = has_snapshot;
         self->telemetry_.online = is_online;
 
-        if (has_snapshot)
+        if (has_snapshot && is_online)
         {
             self->publish_snapshot(snapshot);
         }

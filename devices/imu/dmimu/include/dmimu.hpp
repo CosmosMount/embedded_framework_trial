@@ -77,7 +77,7 @@ public:
     struct runtime_config
     {
         mode communication_mode = mode::active;
-        ULONG offline_timeout_ticks = 100U;
+        uint32_t offline_timeout_ticks = 100U;
     };
 
     struct config
@@ -104,7 +104,8 @@ public:
         float quaternion[4]{};         // W, X, Y, Z
         uint32_t valid_mask = 0U;
         uint32_t sequence = 0U;
-        ULONG received_tick = 0U;
+        // Oldest frame in this complete snapshot, captured on CAN reception.
+        uint32_t received_tick = 0U;
     };
 
     struct command_reply
@@ -134,8 +135,8 @@ public:
         uint32_t offline_event_count = 0U;
         uint32_t reconnect_count = 0U;
         uint32_t pending_valid_mask = 0U;
-        ULONG last_frame_tick = 0U;
-        ULONG last_snapshot_tick = 0U;
+        uint32_t last_frame_tick = 0U;
+        uint32_t last_snapshot_tick = 0U;
         command_reply last_reply{};
     };
 
@@ -178,6 +179,7 @@ private:
     struct alignas(ULONG) queued_frame
     {
         uint8_t data[8]{};
+        uint32_t received_tick = 0U;
     };
 
     static_assert(sizeof(queued_frame) % sizeof(ULONG) == 0U,
@@ -201,7 +203,7 @@ private:
     static constexpr float quaternion_max = 1.0f;
 
     void enqueue_from_isr(bsp::can::bus bus, const bsp::can::rx_frame& frame);
-    void process_frame(const uint8_t data[8]);
+    void process_frame(const queued_frame& frame);
     void decode_accel(const uint8_t data[8]);
     void decode_gyro(const uint8_t data[8]);
     void decode_euler(const uint8_t data[8]);

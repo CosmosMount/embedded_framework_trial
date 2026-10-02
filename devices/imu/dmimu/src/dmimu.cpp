@@ -42,7 +42,8 @@ types::status dmimu::initialize(const config& cfg)
     if (cfg.transport.can_type != bsp::can::bus_type::classic ||
         !valid_device_id(cfg.transport.can_id) ||
         !valid_device_id(cfg.transport.master_id) ||
-        cfg.runtime.offline_timeout_ticks == 0U)
+        cfg.runtime.offline_timeout_ticks == 0U ||
+        cfg.runtime.offline_timeout_ticks > INT32_MAX)
     {
         return types::status::invalid_arg;
     }
@@ -100,6 +101,7 @@ void dmimu::enqueue_from_isr(bsp::can::bus bus, const bsp::can::rx_frame& frame)
 
     queued_frame queued{};
     std::memcpy(queued.data, frame.data, sizeof(queued.data));
+    queued.received_tick = static_cast<uint32_t>(tx_time_get());
     if (tx_queue_send(&rx_queue_, &queued, TX_NO_WAIT) != TX_SUCCESS)
     {
         rx_queue_drop_count_.fetch_add(1U, std::memory_order_relaxed);
@@ -121,7 +123,7 @@ bool dmimu::process_next(ULONG wait_option)
         return false;
     }
 
-    process_frame(queued.data);
+    process_frame(queued);
     return true;
 }
 
@@ -135,15 +137,17 @@ uint32_t dmimu::process_pending()
     return processed;
 }
 
-void dmimu::process_frame(const uint8_t data[8])
+void dmimu::process_frame(const queued_frame& frame)
 {
-    if (data == nullptr)
+    if (working_.valid_mask != 0U &&
+        static_cast<uint32_t>(frame.received_tick - working_.received_tick) >
+            cfg_.runtime.offline_timeout_ticks)
     {
-        ++diag_.rx_invalid_frame_count;
-        return;
+        working_.valid_mask = 0U;
     }
-
-    diag_.last_frame_tick = tx_time_get();
+    if (working_.valid_mask == 0U) working_.received_tick = frame.received_tick;
+    const uint8_t* data = frame.data;
+    diag_.last_frame_tick = frame.received_tick;
     switch (data[0])
     {
     case command_header:
@@ -268,7 +272,6 @@ void dmimu::commit_if_complete()
 
     working_.valid_mask = complete_valid_mask;
     working_.sequence = completed_.sequence + 1U;
-    working_.received_tick = tx_time_get();
     completed_ = working_;
     working_.valid_mask = 0U;
     snapshot_available_ = true;
@@ -302,7 +305,8 @@ bool dmimu::take_snapshot(snapshot& out)
 bool dmimu::online() const
 {
     return initialized_ && online_ && diag_.complete_snapshot_count != 0U &&
-           (tx_time_get() - diag_.last_snapshot_tick) <= cfg_.runtime.offline_timeout_ticks;
+           static_cast<uint32_t>(static_cast<uint32_t>(tx_time_get()) - diag_.last_snapshot_tick) <=
+               cfg_.runtime.offline_timeout_ticks;
 }
 
 bool dmimu::audit_online()
@@ -325,8 +329,10 @@ bool dmimu::audit_online()
 
 void dmimu::clear_measurements()
 {
+    const uint32_t sequence = completed_.sequence;
     working_ = {};
     completed_ = {};
+    completed_.sequence = sequence;
     snapshot_available_ = false;
     diag_.pending_valid_mask = 0U;
 }
@@ -335,7 +341,7 @@ types::status dmimu::send_command(register_id reg, access operation, uint32_t da
 {
     if (!initialized_)
     {
-        return types::status::error;
+        return types::status::not_initialized;
     }
 
     uint8_t payload[8] = {
