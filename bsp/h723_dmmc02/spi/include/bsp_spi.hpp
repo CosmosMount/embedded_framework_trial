@@ -4,8 +4,8 @@
 #include "bsp_dma.hpp"
 #include "usertypes.hpp"
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 
 namespace bsp::spi
 {

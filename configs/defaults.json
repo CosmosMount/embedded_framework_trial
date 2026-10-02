@@ -7,6 +7,14 @@
       "capacity": 64,
       "level": "info"
     },
+    "ui": {
+      "uart_timeout_ms": 100
+    },
+    "led": {
+      "spi_timeout_ms": 1000,
+      "brightness": 7,
+      "blink_half_period_calls": 250
+    },
     "motor_start": {
       "enable_timeout_ticks": 1000
     },
@@ -37,24 +45,23 @@
       }
     },
     "bmi088": {
-      "spi_timeout_ms": 2
+      "spi_timeout_ms": 2,
+      "temp_control_period_ticks": 125,
+      "spi_lock_wait_ticks": 2
     },
     "ahrs": {
       "solver": "quaternion_ekf",
       "imu_offset_x": 0,
       "imu_thread_priority": 3,
-      "temp_thread_priority": 4,
       "target_temp": 45,
-      "loop_sleep_ticks": 0
+      "loop_sleep_ticks": 0,
+      "temp_thread_priority": 4
     },
     "remoter": {
       "source": "none",
       "thread_priority": 2,
       "rx_timeout_ticks": 100,
-      "offline_timeout_ticks": 120,
-      "ps2_uart_offline_timeout_ticks": 600,
-      "ps2_uart_frame_timeout_ticks": 20,
-      "ps2_uart_deadzone": 0.08
+      "offline_timeout_ticks": 120
     },
     "referee": {
       "thread_priority": 8
@@ -71,15 +78,18 @@
       "receive_wait_ticks": 1,
       "request_period_ticks": 1
     },
-    "can_diag": {
-      "enabled": false,
-      "sample_period_ms": 1000,
-      "window_size": 60
-    },
     "bindings": {
       "remoter_uart": "none",
       "vt03_uart": "none",
       "referee_uart": "none"
+    },
+    "ps2": {
+      "spi_timeout_ms": 20,
+      "gpio_half_period_us": 5,
+      "gpio_cs_setup_us": 20,
+      "gpio_cs_hold_us": 20,
+      "axis_deadzone": 0.02,
+      "poll_period_ticks": 10
     }
   },
   "boards": {

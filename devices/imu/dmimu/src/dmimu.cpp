@@ -1,35 +1,18 @@
 #include "dmimu.hpp"
+#include "quantize.hpp"
+#include "bsp_dwt.hpp"
 
 #include <cstring>
 
 namespace imu
 {
 
-/*
- * DM-IMU official compatibility notes
- * ------------------------------------
- * This implementation ports the protocol behaviour from DAMIAO's official
- * MC02 CAN example. HAL/FDCAN ownership is intentionally replaced by the PNX
- * BSP and the ISR only queues raw frames for the owning service thread.
- *
- * WARNING / TODO(DMIMU-PROTOCOL-VERIFY):
- * The V1.2 manual's quaternion bit table assigns DATA[2][7:2] to W[5:0],
- * which implies a 0xFC mask. The official sample uses 0xF8 and therefore
- * appears to discard one W bit. Keep the official 0xF8 behaviour during the
- * first migration; verify it with captured frames/vendor feedback before any
- * correction.
- *
- * TODO(DMIMU-TEMPERATURE):
- * The manual labels acceleration DATA[1] as temperature and publishes a
- * 0..60 range, while the official CAN parser does not decode it. Preserve the
- * official behaviour for now and leave snapshot::temperature at zero.
- *
- * DEPLOYMENT REQUIREMENT(DMIMU-ACTIVE-MODE):
- * Active mode is configured outside this firmware. Before deployment, configure
- * the DMIMU to actively transmit acceleration, angular velocity, Euler angle and
- * quaternion frames. This driver does not change communication mode, output
- * selection or other persistent device parameters during initialization.
- */
+// CAN data layout: DM-IMU-L1 manual V1.2, printed p.10 (PDF p.11).
+// Temperature: manual V1.3 (2026-09-22, firmware 2.0.3.0), p.11.
+// Sources: https://github.com/dmBots/DM-IMU/tree/ca10a12d46c4df9e219b696f2e0b016fc43a9a58/manual
+//          https://gitee.com/kit-miao/dm-imu/tree/master/%E8%AF%B4%E6%98%8E%E4%B9%A6
+// Active mode/output selection must be configured on the device externally;
+// initialization does not change persistent device settings.
 
 namespace
 {
@@ -50,20 +33,22 @@ bool valid_device_id(uint32_t id)
 
 } // namespace
 
-bool dmimu::initialize(const config& cfg)
+types::status dmimu::initialize(const config& cfg)
 {
     if (initialized_)
     {
-        return true;
+        return types::status::ok;
     }
     if (cfg.transport.can_type != bsp::can::bus_type::classic ||
         !valid_device_id(cfg.transport.can_id) ||
         !valid_device_id(cfg.transport.master_id) ||
         cfg.runtime.offline_timeout_ticks == 0U)
     {
-        return false;
+        return types::status::invalid_arg;
     }
 
+    const auto clock_status = bsp::dwt::init();
+    if (clock_status != types::status::ok) return clock_status;
     cfg_ = cfg;
     clear_measurements();
     diag_ = {};
@@ -75,27 +60,29 @@ bool dmimu::initialize(const config& cfg)
     if (tx_queue_create(&rx_queue_, const_cast<CHAR*>("dmimu_rx"), rx_queue_message_words,
                         rx_queue_storage_, sizeof(rx_queue_storage_)) != TX_SUCCESS)
     {
-        return false;
+        return types::status::error;
     }
     rx_queue_ready_.store(true, std::memory_order_release);
 
-    if (bsp::can::init(cfg_.transport.can_bus) != types::status::ok)
+    const auto can_status = bsp::can::init(cfg_.transport.can_bus);
+    if (can_status != types::status::ok)
     {
         rx_queue_ready_.store(false, std::memory_order_release);
         tx_queue_delete(&rx_queue_);
-        return false;
+        return can_status;
     }
     const auto callback = bsp::can::rx_callback::bind<dmimu, &dmimu::enqueue_from_isr>(this);
-    if (bsp::can::register_rx_callback(cfg_.transport.can_bus, callback) != types::status::ok)
+    const auto callback_status = bsp::can::register_rx_callback(cfg_.transport.can_bus, callback);
+    if (callback_status != types::status::ok)
     {
         rx_queue_ready_.store(false, std::memory_order_release);
         tx_queue_delete(&rx_queue_);
-        return false;
+        return callback_status;
     }
 
     initialized_ = true;
     diag_.initialized = true;
-    return true;
+    return types::status::ok;
 }
 
 void dmimu::enqueue_from_isr(bsp::can::bus bus, const bsp::can::rx_frame& frame)
@@ -141,7 +128,7 @@ bool dmimu::process_next(ULONG wait_option)
 uint32_t dmimu::process_pending()
 {
     uint32_t processed = 0U;
-    while (process_next(TX_NO_WAIT))
+    while (processed < rx_queue_depth && process_next(TX_NO_WAIT))
     {
         ++processed;
     }
@@ -188,11 +175,10 @@ void dmimu::decode_accel(const uint8_t data[8])
     const uint16_t y = static_cast<uint16_t>((static_cast<uint16_t>(data[5]) << 8U) | data[4]);
     const uint16_t z = static_cast<uint16_t>((static_cast<uint16_t>(data[7]) << 8U) | data[6]);
 
-    working_.accel.x = uint_to_float(x, accel_min, accel_max, 16U);
-    working_.accel.y = uint_to_float(y, accel_min, accel_max, 16U);
-    working_.accel.z = uint_to_float(z, accel_min, accel_max, 16U);
-    // Official sample ignores data[1], which the V1.2 manual labels as
-    // temperature. See TODO(DMIMU-TEMPERATURE) above.
+    working_.accel.x = math::dequantize(x, accel_min, accel_max, 16U);
+    working_.accel.y = math::dequantize(y, accel_min, accel_max, 16U);
+    working_.accel.z = math::dequantize(z, accel_min, accel_max, 16U);
+    working_.temperature = static_cast<float>(data[1]); // Integer degrees Celsius.
     working_.valid_mask |= accel_valid;
     ++diag_.rx_accel_count;
 }
@@ -203,9 +189,9 @@ void dmimu::decode_gyro(const uint8_t data[8])
     const uint16_t y = static_cast<uint16_t>((static_cast<uint16_t>(data[5]) << 8U) | data[4]);
     const uint16_t z = static_cast<uint16_t>((static_cast<uint16_t>(data[7]) << 8U) | data[6]);
 
-    working_.gyro.x = uint_to_float(x, gyro_min, gyro_max, 16U);
-    working_.gyro.y = uint_to_float(y, gyro_min, gyro_max, 16U);
-    working_.gyro.z = uint_to_float(z, gyro_min, gyro_max, 16U);
+    working_.gyro.x = math::dequantize(x, gyro_min, gyro_max, 16U);
+    working_.gyro.y = math::dequantize(y, gyro_min, gyro_max, 16U);
+    working_.gyro.z = math::dequantize(z, gyro_min, gyro_max, 16U);
     working_.valid_mask |= gyro_valid;
     ++diag_.rx_gyro_count;
 }
@@ -217,19 +203,19 @@ void dmimu::decode_euler(const uint8_t data[8])
     const uint16_t roll = static_cast<uint16_t>((static_cast<uint16_t>(data[7]) << 8U) | data[6]);
 
     // Official wire order is Pitch, Yaw, Roll (not Roll, Pitch, Yaw).
-    working_.pitch_deg = uint_to_float(pitch, pitch_min, pitch_max, 16U);
-    working_.yaw_deg = uint_to_float(yaw, yaw_min, yaw_max, 16U);
-    working_.roll_deg = uint_to_float(roll, roll_min, roll_max, 16U);
+    working_.pitch_deg = math::dequantize(pitch, pitch_min, pitch_max, 16U);
+    working_.yaw_deg = math::dequantize(yaw, yaw_min, yaw_max, 16U);
+    working_.roll_deg = math::dequantize(roll, roll_min, roll_max, 16U);
     working_.valid_mask |= euler_valid;
     ++diag_.rx_euler_count;
 }
 
 void dmimu::decode_quaternion(const uint8_t data[8])
 {
-    // Preserve the official example's 0xF8 mask for the first migration.
-    // See TODO(DMIMU-PROTOCOL-VERIFY) above before changing it to 0xFC.
+    // DATA[2][7:2] contains W[5:0]. The V1.2 example's 0xF8 drops W bit 0;
+    // follow the protocol table and retain all six bits.
     const uint16_t w = static_cast<uint16_t>((static_cast<uint16_t>(data[1]) << 6U) |
-                                              ((data[2] & 0xF8U) >> 2U));
+                                              ((data[2] & 0xFCU) >> 2U));
     const uint16_t x = static_cast<uint16_t>(((data[2] & 0x03U) << 12U) |
                                               (static_cast<uint16_t>(data[3]) << 4U) |
                                               ((data[4] & 0xF0U) >> 4U));
@@ -238,10 +224,10 @@ void dmimu::decode_quaternion(const uint8_t data[8])
                                               ((data[6] & 0xC0U) >> 6U));
     const uint16_t z = static_cast<uint16_t>(((data[6] & 0x3FU) << 8U) | data[7]);
 
-    working_.quaternion[0] = uint_to_float(w, quaternion_min, quaternion_max, 14U);
-    working_.quaternion[1] = uint_to_float(x, quaternion_min, quaternion_max, 14U);
-    working_.quaternion[2] = uint_to_float(y, quaternion_min, quaternion_max, 14U);
-    working_.quaternion[3] = uint_to_float(z, quaternion_min, quaternion_max, 14U);
+    working_.quaternion[0] = math::dequantize(w, quaternion_min, quaternion_max, 14U);
+    working_.quaternion[1] = math::dequantize(x, quaternion_min, quaternion_max, 14U);
+    working_.quaternion[2] = math::dequantize(y, quaternion_min, quaternion_max, 14U);
+    working_.quaternion[3] = math::dequantize(z, quaternion_min, quaternion_max, 14U);
     working_.valid_mask |= quaternion_valid;
     ++diag_.rx_quaternion_count;
 }
@@ -470,13 +456,6 @@ dmimu::diagnostics dmimu::diagnostics_snapshot() const
     out.rx_invalid_length_count = rx_invalid_length_count_.load(std::memory_order_relaxed);
     out.last_reply = last_reply_;
     return out;
-}
-
-float dmimu::uint_to_float(uint32_t value, float min, float max, uint8_t bits)
-{
-    const float span = max - min;
-    const uint32_t full_scale = (1UL << bits) - 1UL;
-    return static_cast<float>(value) * span / static_cast<float>(full_scale) + min;
 }
 
 uint32_t dmimu::read_u32_le(const uint8_t* data)

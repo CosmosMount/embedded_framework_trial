@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include "pid.hpp"
 #if HAS_AHRS
 #include "bmi088.hpp"
 #include "quaternion_ekf.hpp"
@@ -11,7 +12,7 @@
 #endif
 #include "imu.hpp"
 #include "msg.hpp"
-#include "runtime_monitor.hpp"
+#include "duration_stats.hpp"
 #include "tx_api.h"
 #include <type_traits>
 
@@ -22,7 +23,7 @@ namespace ahrs
 struct config
 {
     // Robot defaults come from params; callers may still override individual
-    // fields before passing this configuration to service::init().
+    // fields before passing this configuration to fusion::init().
     float imu_offset_x = params::ahrs::imu_offset_x;
     uint32_t imu_thread_priority = params::ahrs::imu_thread_priority;
     uint32_t temp_thread_priority = params::ahrs::temp_thread_priority;
@@ -43,6 +44,7 @@ struct telemetry
     bool calibrated = false;
     bool read_ok = false;
     bool solved = false;
+    types::status device_status = types::status::not_initialized;
     uint32_t sample_error_count = 0;
     uint32_t imu_spi_read_error_count = 0;
     uint32_t imu_spi_write_error_count = 0;
@@ -72,10 +74,11 @@ struct telemetry
 };
 
 extern "C" telemetry ahrs_debug_telemetry;
+extern "C" control::pid ahrs_temperature_pid;
 #endif
 
 #if HAS_DMIMU
-struct dmimu_service_config
+struct dmimu_config
 {
     uint32_t thread_priority = 3U;
     ULONG receive_wait_ticks = 1U;
@@ -89,6 +92,7 @@ struct dmimu_telemetry
     bool thread_started = false;
     bool online = false;
     bool snapshot_received = false;
+    types::status device_status = types::status::not_initialized;
     uint32_t processed_frame_count = 0U;
     uint32_t request_cycle_count = 0U;
     uint32_t request_error_count = 0U;
@@ -108,25 +112,57 @@ extern "C" dmimu_telemetry dmimu_debug_telemetry;
 #endif
 
 #if HAS_AHRS
-class service
+class fusion
 {
 public:
-    static service& instance();
+    static fusion& instance();
 
     types::status init(const config& cfg = {});
     TX_SEMAPHORE* heartbeat_sem() { return &heartbeat_sem_; }
-    imu::bmi088& imu() { return imu_; }
     msg::channel<imu::state>& output() noexcept { return output_; }
     const telemetry& diagnostics() const { return telemetry_; }
 
 private:
     static void imu_thread_entry(ULONG arg);
-    void gyro_data_ready_callback();
+    void on_gyro_ready();
     bool create_resources();
-    void wait_for_gyro_data_ready();
+    void wait_for_sample();
     void fill_state(imu::state& output,
                     const imu::reading& reading);
 
+    enum class temp_state : uint8_t
+    {
+        boost = 0,
+        approach,
+        hold,
+        overtemperature,
+    };
+
+    static constexpr float temp_fault_low = -20.0f;
+    static constexpr float temp_fault_high = 85.0f;
+    static constexpr float temp_boost_duty = params::bmi088::boost_duty;
+    static constexpr float temp_reboost_duty = params::bmi088::reboost_duty;
+    static constexpr float temp_hold_max_duty = params::bmi088::hold_max_duty;
+    static constexpr ULONG temp_control_period_ticks = params::bmi088::temp_control_period_ticks;
+
+    float calculate_temperature_duty(float temperature);
+    float calculate_approach_duty(float temperature);
+    bool valid_temperature(float temperature) const;
+    bool update_temperature();
+    struct thermal_sample
+    {
+        float celsius = 0.0f;
+        bool ready = false;
+        types::status status = types::status::not_initialized;
+        ULONG tick = 0;
+    };
+    thermal_sample thermal_{};
+    thermal_sample temperature_snapshot() const;
+    static void temperature_thread_entry(ULONG arg);
+    TX_THREAD temperature_thread_{};
+    alignas(8) uint8_t temperature_stack_[768]{};
+    temp_state temp_state_ = temp_state::boost;
+    float heater_duty_ = 0.0f;
     config cfg_{};
     imu::bmi088 imu_{};
 
@@ -140,37 +176,35 @@ private:
     msg::channel<imu::state> output_{};
     telemetry& telemetry_ = ahrs_debug_telemetry;
     std::conditional_t<params::ahrs::use_tactical, tactical::ekf, quaternion_ekf> solver_{};
-    runtime::monitor imu_loop_monitor_{500U};
-    bool initialized_ = false;
+    core::duration_stats imu_loop_stats_{};
+    types::status initialization_status_ = types::status::not_initialized;
 };
 
 #endif
 
 #if HAS_DMIMU
-class dmimu_service
+class dmimu_reader
 {
 public:
-    static dmimu_service& instance();
+    static dmimu_reader& instance();
 
-    // Calling init is the enable switch for this service. The later robot
+    // Calling init is the enable switch for this fusion. The later robot
     // configuration layer must omit this call when DMIMU is not configured.
     types::status init(const imu::dmimu::config& dmimu_cfg,
-                       const dmimu_service_config& service_cfg = {});
+                       const dmimu_config& reader_cfg = {});
     TX_SEMAPHORE* heartbeat_sem() { return &heartbeat_sem_; }
-    imu::dmimu& dmimu() { return dmimu_; }
     msg::channel<imu::state>& output() noexcept { return output_; }
     const dmimu_telemetry& diagnostics() const { return telemetry_; }
 
 private:
     static void thread_entry(ULONG arg);
-    bool create_resources();
+    types::status create_resources();
     bool request_snapshot();
     void publish_snapshot(const imu::dmimu::snapshot& snapshot);
     void publish_offline_zero();
-    void update_runtime_telemetry();
 
     imu::dmimu::config dmimu_cfg_{};
-    dmimu_service_config service_cfg_{};
+    dmimu_config reader_cfg_{};
     imu::dmimu dmimu_{};
 
     TX_THREAD thread_{};
@@ -179,8 +213,8 @@ private:
 
     msg::channel<imu::state> output_{};
     dmimu_telemetry& telemetry_ = dmimu_debug_telemetry;
-    runtime::monitor loop_monitor_{1000U};
-    bool initialized_ = false;
+    core::duration_stats loop_stats_{};
+    types::status initialization_status_ = types::status::not_initialized;
 };
 #endif
 

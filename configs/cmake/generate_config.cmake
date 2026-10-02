@@ -79,10 +79,8 @@ function(_pnx_motor_control_mode_expr mode out_var)
         set(${out_var} "::motors::mode::pos_speed" PARENT_SCOPE)
     elseif(mode_lower STREQUAL "speed" OR mode_lower STREQUAL "velocity")
         set(${out_var} "::motors::mode::speed" PARENT_SCOPE)
-    elseif(mode_lower STREQUAL "multi")
-        set(${out_var} "::motors::mode::multi" PARENT_SCOPE)
     else()
-        message(FATAL_ERROR "robot motor control_mode must be relax, current, torque, mit, pos_speed, speed, or multi")
+        message(FATAL_ERROR "robot motor control_mode must be relax, current, voltage_raw, torque, mit, pos_speed, or speed")
     endif()
 endfunction()
 
@@ -295,7 +293,6 @@ if(json_err)
     set(build_usbx "false")
 endif()
 _pnx_json_bool_to_cmake("${build_usbx}" params_usbx)
-
 
 # --- robot.json: optional DMIMU build switch ---
 # Absence of devices.dmimu, or absence/false value of its enabled member,
@@ -702,7 +699,6 @@ if(remoter_uart_present AND remoter_has_rx_dma)
 else()
     set(HAS_REMOTER 0)
 endif()
-set(HAS_PS2_UART ${HAS_REMOTER})
 
 pnx_ioc_hw_in_list("${PNX_IOC_UART_HW}" "${vt03_uart}" vt03_uart_present)
 pnx_ioc_uart_has_dma("${PNX_IOC_LINES}" "${vt03_uart}" "RX" vt03_has_rx_dma)
@@ -725,71 +721,45 @@ else()
     set(HAS_UI 0)
 endif()
 
+set(ENABLE_DR16 0)
+set(ENABLE_VT03 0)
+set(ENABLE_PS2 0)
 if(remoter_source STREQUAL "")
     if(HAS_REMOTER)
         set(ENABLE_DR16 1)
-        set(ENABLE_VT03 0)
-        set(ENABLE_PS2 0)
-        set(ENABLE_PS2_UART 0)
     elseif(HAS_VT03)
-        set(ENABLE_DR16 0)
         set(ENABLE_VT03 1)
-        set(ENABLE_PS2 0)
-        set(ENABLE_PS2_UART 0)
-    else()
-        set(ENABLE_DR16 0)
-        set(ENABLE_VT03 0)
-        set(ENABLE_PS2 0)
-        set(ENABLE_PS2_UART 0)
     endif()
 elseif(remoter_source STREQUAL "dr16")
-    if(NOT HAS_REMOTER)
-        message(FATAL_ERROR "params.remoter.source=dr16 requires remoter UART RX DMA support in the selected board IOC")
-    endif()
     set(ENABLE_DR16 1)
-    set(ENABLE_VT03 0)
-    set(ENABLE_PS2 0)
-    set(ENABLE_PS2_UART 0)
 elseif(remoter_source STREQUAL "vt03")
-    if(NOT HAS_VT03)
-        message(FATAL_ERROR "params.remoter.source=vt03 requires bindings.vt03_uart with RX DMA support in the selected board IOC")
-    endif()
-    set(ENABLE_DR16 0)
     set(ENABLE_VT03 1)
-    set(ENABLE_PS2 0)
-    set(ENABLE_PS2_UART 0)
+elseif(remoter_source STREQUAL "vt03_dr16")
+    set(ENABLE_VT03 1)
+    set(ENABLE_DR16 1)
 elseif(remoter_source STREQUAL "ps2")
-    if(NOT HAS_PS2_DEVICE)
-        message(FATAL_ERROR "params.remoter.source=ps2 requires valid PS2 pins")
-    endif()
-    set(ENABLE_DR16 0)
-    set(ENABLE_VT03 0)
     set(ENABLE_PS2 1)
-    set(ENABLE_PS2_UART 0)
-elseif(remoter_source STREQUAL "ps2_uart")
-    if(NOT HAS_PS2_UART)
-        message(FATAL_ERROR "params.remoter.source=ps2_uart requires the bound remoter UART to have RX DMA support in the selected board IOC")
-    endif()
-    set(ENABLE_DR16 0)
-    set(ENABLE_VT03 0)
-    set(ENABLE_PS2 0)
-    set(ENABLE_PS2_UART 1)
-elseif(remoter_source STREQUAL "none"
-       OR remoter_source STREQUAL "off"
-       OR remoter_source STREQUAL "disabled")
-    set(ENABLE_DR16 0)
-    set(ENABLE_VT03 0)
-    set(ENABLE_PS2 0)
-    set(ENABLE_PS2_UART 0)
-else()
-    message(FATAL_ERROR "params.remoter.source must be one of: dr16, vt03, ps2, ps2_uart, none")
+elseif(NOT remoter_source STREQUAL "none"
+       AND NOT remoter_source STREQUAL "off"
+       AND NOT remoter_source STREQUAL "disabled")
+    message(FATAL_ERROR "params.remoter.source must be one of: dr16, vt03, vt03_dr16, ps2, none")
 endif()
 
-string(JSON can_diag_enabled ERROR_VARIABLE json_err GET "${params_json}" can_diag enabled)
-if(can_diag_enabled STREQUAL "true" OR can_diag_enabled STREQUAL "1" OR can_diag_enabled STREQUAL "ON")
-    set(CAN_DIAG_ENABLED 1)
-else()
-    set(CAN_DIAG_ENABLED 0)
+if(ENABLE_DR16 AND NOT HAS_REMOTER)
+    message(FATAL_ERROR "params.remoter.source=${remoter_source} requires bindings.remoter_uart with RX DMA support in the selected board IOC")
+endif()
+if(ENABLE_VT03 AND NOT HAS_VT03)
+    message(FATAL_ERROR "params.remoter.source=${remoter_source} requires bindings.vt03_uart with RX DMA support in the selected board IOC")
+endif()
+if(ENABLE_PS2 AND NOT HAS_PS2_DEVICE)
+    message(FATAL_ERROR "params.remoter.source=ps2 requires valid PS2 pins")
+endif()
+if(ENABLE_DR16 AND ENABLE_VT03 AND remoter_uart STREQUAL vt03_uart)
+    message(FATAL_ERROR "bindings.remoter_uart and bindings.vt03_uart must use distinct UARTs for vt03_dr16")
+endif()
+if(HAS_REFEREE AND ((ENABLE_VT03 AND vt03_uart STREQUAL referee_uart)
+   OR (ENABLE_DR16 AND remoter_uart STREQUAL referee_uart)))
+    message(FATAL_ERROR "bindings.referee_uart conflicts with an enabled remote receiver; choose a separate UART or explicitly set referee_uart=none")
 endif()
 
 if(PNX_IOC_HAS_USB AND params_usbx)
@@ -971,12 +941,12 @@ if(can_app_binding_count GREATER 0)
         if(NOT can_binding_rx_header STREQUAL "")
             _pnx_can_header_literal("${can_binding_rx_header}" "${role}" "rx" ${can_binding_max_id} can_binding_rx_header_cpp)
             string(APPEND can_app_binding_body
-                "inline constexpr std::uint32_t ${role_ident}_rx_header = ${can_binding_rx_header_cpp}${generated_semicolon_token}\n")
+                "inline constexpr uint32_t ${role_ident}_rx_header = ${can_binding_rx_header_cpp}${generated_semicolon_token}\n")
         endif()
         if(NOT can_binding_tx_header STREQUAL "")
             _pnx_can_header_literal("${can_binding_tx_header}" "${role}" "tx" ${can_binding_max_id} can_binding_tx_header_cpp)
             string(APPEND can_app_binding_body
-                "inline constexpr std::uint32_t ${role_ident}_tx_header = ${can_binding_tx_header_cpp}${generated_semicolon_token}\n")
+                "inline constexpr uint32_t ${role_ident}_tx_header = ${can_binding_tx_header_cpp}${generated_semicolon_token}\n")
         endif()
     endforeach()
 endif()
@@ -1038,7 +1008,7 @@ list(JOIN usart_config_list ", " usart_config_cpp)
 list(LENGTH PNX_IOC_UART_HW usart_port_count)
 
 # --- params.json: application UART bindings ---
-set(uart_reserved_roles dr16 vt03 ps2_uart referee)
+set(uart_reserved_roles dr16 vt03 referee)
 foreach(hw ${PNX_IOC_UART_HW})
     string(TOLOWER "${hw}" hw_lower)
     list(APPEND uart_reserved_roles "${hw_lower}")
@@ -1178,10 +1148,6 @@ set(pwm_channel_enum_entries "")
 set(pwm_feature_macros "")
 set(pwm_feature_constants "")
 set(pwm_binding_cases "")
-set(pwm_failsafe_binding_cases "")
-set(pwm_failsafe_debug_cases "")
-set(pwm_failsafe_roles "")
-set(pwm_failsafe_timers "")
 set(pwm_channel_index 0)
 foreach(resource ${PNX_IOC_PWM_CHANNELS})
     if(NOT resource MATCHES "^(TIM[0-9]+)_CH([1-4])$")
@@ -1232,54 +1198,7 @@ if(pwm_app_binding_count GREATER 0)
         string(APPEND pwm_app_binding_body
             "inline constexpr bsp::pwm::channel ${role_ident} = bsp::pwm::channel::${channel_ident}${generated_semicolon_token}\n")
 
-        string(JSON failsafe_timer ERROR_VARIABLE json_err GET
-            "${board_json}" bindings pwm_channels ${role} failsafe_timer)
-        if(NOT json_err)
-            string(TOUPPER "${failsafe_timer}" failsafe_timer)
-            if(failsafe_timer STREQUAL timer)
-                message(FATAL_ERROR
-                    "PWM role '${role}' must use a separate failsafe_timer, not ${timer}")
-            endif()
-            pnx_ioc_hw_in_list("${PNX_IOC_TIM_HW}" "${failsafe_timer}" failsafe_timer_present)
-            pnx_ioc_timer_has_update_dma("${PNX_IOC_LINES}" "${failsafe_timer}" failsafe_has_dma)
-            if(NOT failsafe_timer_present OR NOT failsafe_has_dma)
-                message(FATAL_ERROR
-                    "PWM role '${role}' failsafe timer ${failsafe_timer} must have an IOC update DMA request")
-            endif()
-            list(FIND pwm_failsafe_timers "${failsafe_timer}" failsafe_timer_index)
-            if(NOT failsafe_timer_index LESS 0)
-                message(FATAL_ERROR
-                    "PWM failsafe timer ${failsafe_timer} is assigned to more than one PWM role")
-            endif()
-            list(APPEND pwm_failsafe_timers "${failsafe_timer}")
-            list(APPEND pwm_failsafe_roles "${role}")
-
-            string(TOLOWER "${failsafe_timer}" failsafe_timer_lower)
-            pnx_ioc_timer_clock_hz("${PNX_IOC_LINES}" "${failsafe_timer}" failsafe_timer_clock_hz)
-            string(APPEND pwm_failsafe_binding_cases
-                "    case channel::${channel_ident}: out = { &h${failsafe_timer_lower}, TIM_DMA_ID_UPDATE, ${failsafe_timer_clock_hz}U, reinterpret_cast<std::uintptr_t>(&${timer}->CCR${channel_number}) }${generated_semicolon_token} return true${generated_semicolon_token}\n")
-            if(PNX_BOARD_FAMILY STREQUAL "stm32h7")
-                set(pwm_debug_unfreeze_prefix "__HAL_DBGMCU_UnFreeze_")
-            elseif(PNX_BOARD_FAMILY STREQUAL "stm32f4")
-                set(pwm_debug_unfreeze_prefix "__HAL_DBGMCU_UNFREEZE_")
-            else()
-                message(FATAL_ERROR "Unsupported PWM failsafe family ${PNX_BOARD_FAMILY}")
-            endif()
-            string(APPEND pwm_failsafe_debug_cases
-                "    case channel::${channel_ident}:\n"
-                "        ${pwm_debug_unfreeze_prefix}${timer}()${generated_semicolon_token}\n"
-                "        ${pwm_debug_unfreeze_prefix}${failsafe_timer}()${generated_semicolon_token}\n"
-                "        return${generated_semicolon_token}\n")
-        endif()
     endforeach()
-endif()
-
-if(BOARD_HAS_BMI088_HEATER)
-    list(FIND pwm_failsafe_roles "${bmi088_heater_pwm}" bmi088_failsafe_index)
-    if(bmi088_failsafe_index LESS 0)
-        message(FATAL_ERROR
-            "BMI088 heater PWM role '${bmi088_heater_pwm}' requires a failsafe_timer binding")
-    endif()
 endif()
 
 set(adc_channel_enum_entries "")
@@ -1339,7 +1258,6 @@ if(adc_app_binding_count GREATER 0)
 endif()
 
 pnx_ioc_uart_index("${PNX_IOC_UART_HW}" "${remoter_uart}" dr16_port_idx)
-pnx_ioc_uart_index("${PNX_IOC_UART_HW}" "${remoter_uart}" ps2_uart_port_idx)
 pnx_ioc_uart_index("${PNX_IOC_UART_HW}" "${vt03_uart}" vt03_port_idx)
 pnx_ioc_uart_index("${PNX_IOC_UART_HW}" "${referee_uart}" referee_port_idx)
 
@@ -1353,24 +1271,10 @@ if(vt03_port_idx GREATER_EQUAL 0)
 else()
     set(vt03_binding "bsp::usart::port_count")
 endif()
-if(ps2_uart_port_idx GREATER_EQUAL 0)
-    set(ps2_uart_binding "${remoter_uart}")
-else()
-    set(ps2_uart_binding "bsp::usart::port_count")
-endif()
 if(referee_port_idx GREATER_EQUAL 0)
     set(referee_binding "${referee_uart}")
 else()
     set(referee_binding "bsp::usart::port_count")
-endif()
-
-set(active_remoter_uart "")
-if(ENABLE_DR16)
-    set(active_remoter_uart "${remoter_uart}")
-elseif(ENABLE_VT03)
-    set(active_remoter_uart "${vt03_uart}")
-elseif(ENABLE_PS2_UART)
-    set(active_remoter_uart "${remoter_uart}")
 endif()
 
 # --- params namespace (explicit keys per section) ---
@@ -1397,12 +1301,11 @@ string(CONCAT params_logging_body
     "inline constexpr uint8_t default_level = ${params_log_level_value}U${generated_semicolon_token}\n"
     "inline constexpr uint16_t capacity = ${params_log_capacity}U${generated_semicolon_token}\n")
 
-
 set(PNX_HAS_REMOTER_PARAMS 0)
-if(ENABLE_DR16 OR ENABLE_VT03 OR ENABLE_PS2 OR ENABLE_PS2_UART)
+if(ENABLE_DR16 OR ENABLE_VT03 OR ENABLE_PS2)
     set(PNX_HAS_REMOTER_PARAMS 1)
 endif()
-foreach(entry IN ITEMS "remoter|PNX_HAS_REMOTER_PARAMS" "can_diag|CAN_DIAG_ENABLED" "bmi088|HAS_BMI088" "ahrs|HAS_AHRS" "dmimu|HAS_DMIMU" "usb|ENABLE_USBX" "referee|HAS_REFEREE")
+foreach(entry IN ITEMS "remoter|PNX_HAS_REMOTER_PARAMS" "bmi088|HAS_BMI088" "ahrs|HAS_AHRS" "dmimu|HAS_DMIMU" "usb|ENABLE_USBX" "referee|HAS_REFEREE")
     string(REPLACE "|" ";" parts "${entry}")
     list(GET parts 0 section)
     list(GET parts 1 enabled)
@@ -1413,7 +1316,17 @@ foreach(entry IN ITEMS "remoter|PNX_HAS_REMOTER_PARAMS" "can_diag|CAN_DIAG_ENABL
 endforeach()
 
 set(params_bmi088_body "")
-_pnx_param(std::uint32_t "bmi088" "spi_timeout_ms" _line)
+_pnx_param(uint32_t "bmi088" "spi_lock_wait_ticks" _line)
+string(APPEND params_bmi088_body "${_line}")
+foreach(field IN ITEMS spi_lock_wait_ticks temp_control_period_ticks)
+    string(JSON value GET "${params_json}" bmi088 ${field})
+    if(NOT value MATCHES "^[0-9]+$" OR value LESS 1 OR value GREATER 2147483647)
+        message(FATAL_ERROR "bmi088.${field} must be a positive finite tick count")
+    endif()
+endforeach()
+_pnx_param(uint32_t "bmi088" "temp_control_period_ticks" _line)
+string(APPEND params_bmi088_body "${_line}")
+_pnx_param(uint32_t "bmi088" "spi_timeout_ms" _line)
 string(APPEND params_bmi088_body "${_line}")
 string(JSON bmi088_spi_timeout GET "${params_json}" bmi088 spi_timeout_ms)
 string(JSON bmi088_spi_timeout_type TYPE "${params_json}" bmi088 spi_timeout_ms)
@@ -1448,11 +1361,11 @@ _pnx_param(float "bmi088" "pid_scalar_b" _line)
 string(APPEND params_bmi088_body "${_line}")
 
 set(params_ahrs_body "")
+_pnx_param(uint32_t "ahrs" "temp_thread_priority" _line)
+string(APPEND params_ahrs_body "${_line}")
 _pnx_param(float "ahrs" "imu_offset_x" _line)
 string(APPEND params_ahrs_body "${_line}")
-_pnx_param(std::uint32_t "ahrs" "imu_thread_priority" _line)
-string(APPEND params_ahrs_body "${_line}")
-_pnx_param(std::uint32_t "ahrs" "temp_thread_priority" _line)
+_pnx_param(uint32_t "ahrs" "imu_thread_priority" _line)
 string(APPEND params_ahrs_body "${_line}")
 _pnx_param(float "ahrs" "target_temp" _line)
 string(APPEND params_ahrs_body "${_line}")
@@ -1465,7 +1378,7 @@ else()
     message(FATAL_ERROR "ahrs.solver must be quaternion_ekf or tactical_ekf")
 endif()
 string(APPEND params_ahrs_body "  inline constexpr bool use_tactical = ${ahrs_use_tactical}${generated_semicolon_token}\n")
-_pnx_param(std::uint32_t "ahrs" "loop_sleep_ticks" _line)
+_pnx_param(uint32_t "ahrs" "loop_sleep_ticks" _line)
 string(APPEND params_ahrs_body "${_line}")
 
 string(JSON params_dmimu_mode ERROR_VARIABLE json_err GET "${params_json}" dmimu communication_mode)
@@ -1489,46 +1402,76 @@ if(params_dmimu_mode_lower STREQUAL "request" AND params_dmimu_request_period LE
     message(FATAL_ERROR "params.dmimu.request_period_ticks must be greater than zero in request mode")
 endif()
 string(CONCAT params_dmimu_body
-    "enum class communication_mode : std::uint8_t { request = 0, active }${generated_semicolon_token}\n"
+    "enum class communication_mode : uint8_t { request = 0, active }${generated_semicolon_token}\n"
     "inline constexpr communication_mode mode = ${params_dmimu_mode_expr}${generated_semicolon_token}\n"
-    "inline constexpr std::uint32_t offline_timeout_ticks = ${params_dmimu_offline_timeout}U${generated_semicolon_token}\n"
-    "inline constexpr std::uint32_t thread_priority = ${params_dmimu_thread_priority}U${generated_semicolon_token}\n"
-    "inline constexpr std::uint32_t receive_wait_ticks = ${params_dmimu_receive_wait}U${generated_semicolon_token}\n"
-    "inline constexpr std::uint32_t request_period_ticks = ${params_dmimu_request_period}U${generated_semicolon_token}\n")
+    "inline constexpr uint32_t offline_timeout_ticks = ${params_dmimu_offline_timeout}U${generated_semicolon_token}\n"
+    "inline constexpr uint32_t thread_priority = ${params_dmimu_thread_priority}U${generated_semicolon_token}\n"
+    "inline constexpr uint32_t receive_wait_ticks = ${params_dmimu_receive_wait}U${generated_semicolon_token}\n"
+    "inline constexpr uint32_t request_period_ticks = ${params_dmimu_request_period}U${generated_semicolon_token}\n")
+
+set(params_ps2_body "")
+foreach(key IN ITEMS spi_timeout_ms gpio_half_period_us gpio_cs_setup_us gpio_cs_hold_us poll_period_ticks)
+    string(JSON value GET "${params_json}" ps2 ${key})
+    if(NOT value MATCHES "^[0-9]+$" OR value LESS 1 OR value GREATER 2147483647)
+        message(FATAL_ERROR "ps2.${key} must be a positive finite integer")
+    endif()
+    _pnx_param(uint32_t "ps2" "${key}" _line)
+    string(APPEND params_ps2_body "${_line}")
+endforeach()
+string(JSON ps2_deadzone GET "${params_json}" ps2 axis_deadzone)
+if(ps2_deadzone LESS 0 OR NOT ps2_deadzone LESS 1)
+    message(FATAL_ERROR "ps2.axis_deadzone must be in [0, 1)")
+endif()
+_pnx_param(float "ps2" "axis_deadzone" _line)
+string(APPEND params_ps2_body "${_line}")
 
 set(params_remoter_body "")
-_pnx_param(std::uint32_t "remoter" "thread_priority" _line)
+_pnx_param(uint32_t "remoter" "thread_priority" _line)
 string(APPEND params_remoter_body "${_line}")
-_pnx_param(std::uint32_t "remoter" "rx_timeout_ticks" _line)
+_pnx_param(uint32_t "remoter" "rx_timeout_ticks" _line)
 string(APPEND params_remoter_body "${_line}")
-_pnx_param(std::uint32_t "remoter" "offline_timeout_ticks" _line)
-string(APPEND params_remoter_body "${_line}")
-_pnx_param(std::uint32_t "remoter" "ps2_uart_offline_timeout_ticks" _line)
-string(APPEND params_remoter_body "${_line}")
-_pnx_param(std::uint32_t "remoter" "ps2_uart_frame_timeout_ticks" _line)
-string(APPEND params_remoter_body "${_line}")
-_pnx_param(float "remoter" "ps2_uart_deadzone" _line)
+string(JSON remoter_timeout GET "${params_json}" remoter offline_timeout_ticks)
+string(JSON remoter_timeout_type TYPE "${params_json}" remoter offline_timeout_ticks)
+if(NOT remoter_timeout_type STREQUAL "NUMBER" OR NOT remoter_timeout MATCHES "^[0-9]+$"
+   OR remoter_timeout LESS 1 OR remoter_timeout GREATER 2147483647)
+    message(FATAL_ERROR "params.remoter.offline_timeout_ticks must be an integer in [1, 2147483647]")
+endif()
+_pnx_param(uint32_t "remoter" "offline_timeout_ticks" _line)
 string(APPEND params_remoter_body "${_line}")
 
 set(params_referee_body "")
-_pnx_param(std::uint32_t "referee" "thread_priority" _line)
+_pnx_param(uint32_t "referee" "thread_priority" _line)
 string(APPEND params_referee_body "${_line}")
 if(params_referee_body STREQUAL "")
-    set(params_referee_body "  inline constexpr std::uint32_t thread_priority = 8${generated_semicolon_token}\n")
+    set(params_referee_body "  inline constexpr uint32_t thread_priority = 8${generated_semicolon_token}\n")
 endif()
+
+string(JSON ui_timeout GET "${params_json}" ui uart_timeout_ms)
+if(NOT ui_timeout MATCHES "^[0-9]+$" OR ui_timeout LESS 1 OR ui_timeout GREATER 2147483647)
+    message(FATAL_ERROR "params.ui.uart_timeout_ms must be a positive finite integer")
+endif()
+_pnx_param(uint32_t "ui" "uart_timeout_ms" params_ui_body)
+
+set(params_led_body "")
+foreach(entry IN ITEMS "spi_timeout_ms|uint32_t|2147483647" "brightness|uint8_t|255" "blink_half_period_calls|uint16_t|32767")
+    string(REPLACE "|" ";" parts "${entry}")
+    list(GET parts 0 key)
+    list(GET parts 1 type)
+    list(GET parts 2 maximum)
+    string(JSON value GET "${params_json}" led ${key})
+    if(NOT value MATCHES "^[0-9]+$" OR value GREATER maximum OR
+       (NOT key STREQUAL "brightness" AND value LESS 1))
+        message(FATAL_ERROR "params.led.${key} is outside its supported integer range")
+    endif()
+    _pnx_param(${type} "led" "${key}" _line)
+    string(APPEND params_led_body "${_line}")
+endforeach()
 
 set(params_usb_body "")
 foreach(field IN ITEMS read_thread_priority write_thread_priority period_ticks)
-    _pnx_param(std::uint32_t "usb" "${field}" _line)
+    _pnx_param(uint32_t "usb" "${field}" _line)
     string(APPEND params_usb_body "${_line}")
 endforeach()
-
-set(params_can_diag_body "")
-_pnx_param(std::uint32_t "can_diag" "sample_period_ms" _line)
-string(APPEND params_can_diag_body "${_line}")
-
-_pnx_param(std::uint32_t "can_diag" "window_size" _line)
-string(APPEND params_can_diag_body "${_line}")
 
 if(MOTOR_DJI)
     set(MOTOR_DJI_C 1)
@@ -1560,17 +1503,41 @@ endforeach()
 
 file(MAKE_DIRECTORY "${OUT_DIR}")
 
+function(_pnx_fixed_table type name count values out_var)
+    if(${count} GREATER 0)
+        set(${out_var} "inline constexpr ${type} ${name}[${count}] = { ${values} }${generated_semicolon_token}\n" PARENT_SCOPE)
+    else()
+        set(${out_var} "inline constexpr const ${type}* ${name} = nullptr${generated_semicolon_token}\n" PARENT_SCOPE)
+    endif()
+endfunction()
+
+_pnx_fixed_table(bus_config configs "${can_bus_count}" "${can_config_cpp}" can_configs_declaration)
+_pnx_fixed_table(bool enabled "${can_bus_count}" "${can_enabled_cpp}" can_enabled_declaration)
+_pnx_fixed_table(bus_type configured_bus_types "${can_bus_count}" "${can_type_cpp}" can_types_declaration)
+_pnx_fixed_table(id_type filter_id_types "${can_bus_count}" "${can_id_type_cpp}" can_ids_declaration)
+_pnx_fixed_table(bus_config configs "${spi_bus_count}" "${spi_config_cpp}" spi_configs_declaration)
+_pnx_fixed_table(input_config input_configs "${gpio_input_count}" "${gpio_input_config_cpp}" gpio_inputs_declaration)
+_pnx_fixed_table(output_config output_configs "${gpio_output_count}" "${gpio_output_config_cpp}" gpio_outputs_declaration)
+_pnx_fixed_table(channel_config configs "${pwm_channel_count}" "${pwm_config_cpp}" pwm_configs_declaration)
+_pnx_fixed_table(port_config configs "${usart_port_count}" "${usart_config_cpp}" uart_configs_declaration)
+_pnx_fixed_table(bool enabled "${usart_port_count}" "${usart_enabled_cpp}" uart_enabled_declaration)
+_pnx_fixed_table(address_range dma_accessible_ranges "${dma_accessible_range_count}" "${dma_accessible_ranges_cpp}" dma_ranges_declaration)
+foreach(count IN ITEMS can_bus_count can_max_rx_callbacks spi_bus_count gpio_input_count gpio_output_count pwm_channel_count adc_channel_count usart_port_count dma_accessible_range_count)
+    if(${count} GREATER 255)
+        message(FATAL_ERROR "${count} exceeds the uint8_t resource index range")
+    endif()
+endforeach()
+
 set(CONFIG_HPP "${OUT_DIR}/config.hpp")
 set(ROBOT_CONFIG_HPP "${OUT_DIR}/robot_config.hpp")
 set(BSP_BINDINGS_CPP "${OUT_DIR}/bsp_bindings.cpp")
-set(BSP_BINDINGS_HPP "${OUT_DIR}/bsp_bindings.hpp")
+set(MODULE_BINDINGS_HPP "${OUT_DIR}/module_bindings.hpp")
 
 _pnx_write_generated("${CONFIG_HPP}"
 "#pragma once\n"
 "// Generated from the selected board IOC, board profile and application configuration. Do not edit.\n\n"
-"#include <array>\n"
-"#include <cstddef>\n"
-"#include <cstdint>\n\n"
+"#include <stddef.h>\n"
+"#include <stdint.h>\n\n"
 "#define HW_HAS_USB ${HW_HAS_USB}\n"
 "#define ENABLE_USBX ${ENABLE_USBX_C}\n"
 "#define HAS_AHRS ${HAS_AHRS}\n"
@@ -1581,16 +1548,13 @@ _pnx_write_generated("${CONFIG_HPP}"
 "#define HAS_PS2_DEVICE ${HAS_PS2_DEVICE}\n"
 "#define PS2_BACKEND_SPI ${PS2_BACKEND_SPI}\n"
 "#define PS2_BACKEND_GPIO ${PS2_BACKEND_GPIO}\n"
-"#define HAS_PS2_UART ${HAS_PS2_UART}\n"
 "#define ENABLE_DR16 ${ENABLE_DR16}\n"
 "#define ENABLE_VT03 ${ENABLE_VT03}\n"
 "#define ENABLE_PS2 ${ENABLE_PS2}\n"
-"#define ENABLE_PS2_UART ${ENABLE_PS2_UART}\n"
 "#define HAS_REFEREE ${HAS_REFEREE}\n"
 "#define HAS_UI ${HAS_UI}\n"
 "${pwm_feature_macros}"
 "#define HAS_MOTORS ${HAS_MOTORS}\n"
-"#define CAN_DIAG_ENABLED ${CAN_DIAG_ENABLED}\n"
 "#define MOTOR_DJI ${MOTOR_DJI_C}\n"
 "#define MOTOR_DM ${MOTOR_DM_C}\n"
 "#define MOTOR_LK ${MOTOR_LK_C}\n"
@@ -1604,11 +1568,9 @@ _pnx_write_generated("${CONFIG_HPP}"
 "inline constexpr bool has_remoter = ${HAS_REMOTER};\n"
 "inline constexpr bool has_vt03 = ${HAS_VT03};\n"
 "inline constexpr bool has_ps2_device = ${HAS_PS2_DEVICE};\n"
-"inline constexpr bool has_ps2_uart = ${HAS_PS2_UART};\n"
 "inline constexpr bool enable_dr16 = ${ENABLE_DR16};\n"
 "inline constexpr bool enable_vt03 = ${ENABLE_VT03};\n"
 "inline constexpr bool enable_ps2 = ${ENABLE_PS2};\n"
-"inline constexpr bool enable_ps2_uart = ${ENABLE_PS2_UART};\n"
 "inline constexpr bool has_referee = ${HAS_REFEREE};\n"
 "inline constexpr bool has_ui = ${HAS_UI};\n"
 "inline constexpr bool has_led = ${HAS_LED};\n"
@@ -1618,15 +1580,14 @@ _pnx_write_generated("${CONFIG_HPP}"
 "inline constexpr bool motor_dm = ${MOTOR_DM_C};\n"
 "inline constexpr bool motor_lk = ${MOTOR_LK_C};\n"
 "inline constexpr bool motor_xv2 = ${MOTOR_XV2_C};\n\n"
-"inline constexpr bool can_diag = ${CAN_DIAG_ENABLED};\n\n"
 "} // namespace config::feature\n\n"
 "namespace bsp {\n"
 "namespace can {\n\n"
-"enum class bus_type : std::uint8_t { classic = 0, fd = 1 };\n"
-"enum class bus_capability : std::uint8_t { classic = 0, fd_no_brs = 1, fd_brs = 2 };\n"
-"enum class id_type : std::uint8_t { standard = 0, extended = 1 };\n"
-"enum class handle_id : std::uint8_t { ${can_handle_enum_entries} };\n"
-"enum class bus : std::uint8_t { ${can_bus_enum_entries} };\n\n"
+"enum class bus_type : uint8_t { classic = 0, fd = 1 };\n"
+"enum class bus_capability : uint8_t { classic = 0, fd_no_brs = 1, fd_brs = 2 };\n"
+"enum class id_type : uint8_t { standard = 0, extended = 1 };\n"
+"enum class handle_id : uint8_t { ${can_handle_enum_entries} };\n"
+"enum class bus : uint8_t { ${can_bus_enum_entries} };\n\n"
 "struct bus_config\n"
 "{\n"
 "    bool enabled = false;\n"
@@ -1635,52 +1596,52 @@ _pnx_write_generated("${CONFIG_HPP}"
 "    bus_capability capability = bus_capability::classic;\n"
 "    id_type filter_id_type = id_type::standard;\n"
 "};\n\n"
-"inline constexpr std::size_t bus_count = ${can_bus_count};\n"
-"inline constexpr std::size_t max_rx_callbacks = ${can_max_rx_callbacks};\n"
-"inline constexpr std::array<bus_config, bus_count> configs = {{ ${can_config_cpp} }};\n"
-"inline constexpr std::array<bool, bus_count> enabled = { ${can_enabled_cpp} };\n"
-"inline constexpr std::array<bus_type, bus_count> configured_bus_types = { ${can_type_cpp} };\n"
-"inline constexpr std::array<id_type, bus_count> filter_id_types = { ${can_id_type_cpp} };\n\n"
+"inline constexpr uint8_t bus_count = ${can_bus_count};\n"
+"inline constexpr uint8_t max_rx_callbacks = ${can_max_rx_callbacks};\n"
+"${can_configs_declaration}"
+"${can_enabled_declaration}"
+"${can_types_declaration}"
+"${can_ids_declaration}"
 "} // namespace can\n\n"
 "namespace spi {\n\n"
-"enum class handle_id : std::uint8_t { ${spi_handle_enum_entries} };\n"
-"enum class bus : std::uint8_t { ${spi_bus_enum_entries} };\n\n"
+"enum class handle_id : uint8_t { ${spi_handle_enum_entries} };\n"
+"enum class bus : uint8_t { ${spi_bus_enum_entries} };\n\n"
 "struct bus_config\n"
 "{\n"
 "    bool enabled = false;\n"
 "    handle_id handle = handle_id::none;\n"
 "};\n\n"
-"inline constexpr std::size_t bus_count = ${spi_bus_count};\n"
-"inline constexpr std::array<bus_config, bus_count> configs = {{ ${spi_config_cpp} }};\n\n"
+"inline constexpr uint8_t bus_count = ${spi_bus_count};\n"
+"${spi_configs_declaration}"
 "} // namespace spi\n\n"
 "namespace gpio {\n\n"
-"enum class port_id : std::uint8_t { none = 0, a, b, c, d, e, f, g, h, i, j, k }${generated_semicolon_token}\n"
-"enum class active_level : std::uint8_t { low = 0, high = 1 }${generated_semicolon_token}\n"
-"enum class input : std::uint8_t { ${gpio_input_enum_entries} }${generated_semicolon_token}\n"
-"enum class output : std::uint8_t { ${gpio_output_enum_entries} }${generated_semicolon_token}\n\n"
-"struct input_config { port_id port${generated_semicolon_token} std::uint8_t pin${generated_semicolon_token} active_level active${generated_semicolon_token} }${generated_semicolon_token}\n"
-"struct output_config { port_id port${generated_semicolon_token} std::uint8_t pin${generated_semicolon_token} active_level active${generated_semicolon_token} }${generated_semicolon_token}\n\n"
-"inline constexpr std::size_t input_count = ${gpio_input_count}${generated_semicolon_token}\n"
-"inline constexpr std::size_t output_count = ${gpio_output_count}${generated_semicolon_token}\n"
-"inline constexpr std::array<input_config, input_count> input_configs = {{ ${gpio_input_config_cpp} }}${generated_semicolon_token}\n"
-"inline constexpr std::array<output_config, output_count> output_configs = {{ ${gpio_output_config_cpp} }}${generated_semicolon_token}\n\n"
+"enum class port_id : uint8_t { none = 0, a, b, c, d, e, f, g, h, i, j, k }${generated_semicolon_token}\n"
+"enum class active_level : uint8_t { low = 0, high = 1 }${generated_semicolon_token}\n"
+"enum class input : uint8_t { ${gpio_input_enum_entries} }${generated_semicolon_token}\n"
+"enum class output : uint8_t { ${gpio_output_enum_entries} }${generated_semicolon_token}\n\n"
+"struct input_config { port_id port${generated_semicolon_token} uint8_t pin${generated_semicolon_token} active_level active${generated_semicolon_token} }${generated_semicolon_token}\n"
+"struct output_config { port_id port${generated_semicolon_token} uint8_t pin${generated_semicolon_token} active_level active${generated_semicolon_token} }${generated_semicolon_token}\n\n"
+"inline constexpr uint8_t input_count = ${gpio_input_count}${generated_semicolon_token}\n"
+"inline constexpr uint8_t output_count = ${gpio_output_count}${generated_semicolon_token}\n"
+"${gpio_inputs_declaration}"
+"${gpio_outputs_declaration}"
 "} // namespace gpio\n\n"
 "namespace pwm {\n\n"
-"enum class channel : std::uint8_t { ${pwm_channel_enum_entries} }${generated_semicolon_token}\n\n"
+"enum class channel : uint8_t { ${pwm_channel_enum_entries} }${generated_semicolon_token}\n\n"
 "struct channel_config\n"
 "{\n"
-"    std::uint32_t timer_clock_hz = 0;\n"
+"    uint32_t timer_clock_hz = 0;\n"
 "};\n\n"
-"inline constexpr std::size_t channel_count = ${pwm_channel_count};\n"
-"inline constexpr std::array<channel_config, channel_count> configs = {{ ${pwm_config_cpp} }};\n\n"
+"inline constexpr uint8_t channel_count = ${pwm_channel_count};\n"
+"${pwm_configs_declaration}"
 "} // namespace pwm\n\n"
 "namespace adc {\n\n"
-"enum class channel : std::uint8_t { ${adc_channel_enum_entries} }${generated_semicolon_token}\n"
-"inline constexpr std::size_t channel_count = ${adc_channel_count}${generated_semicolon_token}\n\n"
+"enum class channel : uint8_t { ${adc_channel_enum_entries} }${generated_semicolon_token}\n"
+"inline constexpr uint8_t channel_count = ${adc_channel_count}${generated_semicolon_token}\n\n"
 "} // namespace adc\n\n"
 "namespace usart {\n\n"
-"using port = std::size_t;\n\n"
-"enum class handle_id : std::uint8_t { ${usart_handle_enum_entries} };\n\n"
+"using port = uint8_t;\n\n"
+"enum class handle_id : uint8_t { ${usart_handle_enum_entries} };\n\n"
 "struct port_config\n"
 "{\n"
 "    bool enabled = false;\n"
@@ -1688,9 +1649,9 @@ _pnx_write_generated("${CONFIG_HPP}"
 "    bool has_rx_dma = false;\n"
 "    bool has_tx_dma = false;\n"
 "};\n\n"
-"inline constexpr std::size_t port_count = ${usart_port_count};\n"
-"inline constexpr std::array<port_config, port_count> configs = {{ ${usart_config_cpp} }};\n"
-"inline constexpr std::array<bool, port_count> enabled = { ${usart_enabled_cpp} };\n\n"
+"inline constexpr uint8_t port_count = ${usart_port_count};\n"
+"${uart_configs_declaration}"
+"${uart_enabled_declaration}"
 "} // namespace usart\n"
 "} // namespace bsp\n\n"
 "namespace app {\n"
@@ -1705,7 +1666,6 @@ _pnx_write_generated("${CONFIG_HPP}"
 "${uart_app_binding_body}"
 "inline constexpr bsp::usart::port dr16 = ${dr16_binding};\n"
 "inline constexpr bsp::usart::port vt03 = ${vt03_binding};\n"
-"inline constexpr bsp::usart::port ps2_uart = ${ps2_uart_binding};\n"
 "inline constexpr bsp::usart::port referee = ${referee_binding};\n"
 "} // namespace uart\n"
 "\nnamespace gpio {\n\n"
@@ -1719,10 +1679,11 @@ _pnx_write_generated("${CONFIG_HPP}"
 "\n} // namespace adc\n"
 "} // namespace app\n\n"
 "namespace board::memory {\n\n"
-"struct address_range { std::uintptr_t start${generated_semicolon_token} std::uintptr_t end${generated_semicolon_token} }${generated_semicolon_token}\n"
+"struct address_range { uintptr_t start${generated_semicolon_token} uintptr_t end${generated_semicolon_token} }${generated_semicolon_token}\n"
 "inline constexpr bool dma_dedicated_section = ${PNX_DMA_DEDICATED_SECTION}${generated_semicolon_token}\n"
-"inline constexpr std::size_t cache_line_size = ${PNX_DMA_CACHE_LINE_SIZE}U${generated_semicolon_token}\n"
-"inline constexpr std::array<address_range, ${dma_accessible_range_count}> dma_accessible_ranges = {{ ${dma_accessible_ranges_cpp} }}${generated_semicolon_token}\n\n"
+"inline constexpr uint32_t cache_line_size = ${PNX_DMA_CACHE_LINE_SIZE}U${generated_semicolon_token}\n"
+"inline constexpr uint8_t dma_accessible_range_count = ${dma_accessible_range_count}${generated_semicolon_token}\n"
+"${dma_ranges_declaration}"
 "} // namespace board::memory\n\n"
 "namespace board::device {\n\n"
 "${board_device_binding_body}"
@@ -1738,18 +1699,20 @@ _pnx_write_generated("${CONFIG_HPP}"
 "namespace params::dmimu {\n"
 "${params_dmimu_body}"
 "} // namespace params::dmimu\n\n"
+"namespace params::ps2 {\n"
+"${params_ps2_body}"
+"} // namespace params::ps2\n"
 "namespace params::remoter {\n"
 "${params_remoter_body}"
 "} // namespace params::remoter\n\n"
 "namespace params::referee {\n"
 "${params_referee_body}"
 "} // namespace params::referee\n\n"
+"namespace params::ui {\n${params_ui_body}}\n"
+"namespace params::led {\n${params_led_body}}\n"
 "namespace params::usb {\n"
 "${params_usb_body}"
 "} // namespace params::usb\n"
-"namespace params::can_diag {\n"
-"${params_can_diag_body}"
-"} // namespace params::can_diag\n"
 )
 
 message(STATUS "Generated ${CONFIG_HPP}")
@@ -1757,28 +1720,15 @@ message(STATUS "Generated ${CONFIG_HPP}")
 set(ps2_device_binding_body "")
 if(HAS_PS2_DEVICE)
     if(PS2_BACKEND_SPI)
-        string(APPEND ps2_device_binding_body
-            "using ps2_transport = ps2_spi${generated_semicolon_token}\n\n"
-            "inline ps2& ps2_instance()\n"
-            "{\n"
-            "    static ps2_transport transport{board::device::ps2::spi, board::device::ps2::cs}${generated_semicolon_token}\n"
-            "    static ps2 controller{transport}${generated_semicolon_token}\n"
-            "    return controller${generated_semicolon_token}\n"
-            "}\n")
+        set(ps2_device_binding_body
+            "inline ::remotes::ps2::spi gamepad_device{board::device::ps2::spi, board::device::ps2::cs}${generated_semicolon_token}\n")
     else()
-        string(APPEND ps2_device_binding_body
-            "using ps2_transport = ps2_gpio${generated_semicolon_token}\n\n"
-            "inline ps2& ps2_instance()\n"
-            "{\n"
-            "    static ps2_transport transport{board::device::ps2::cmd, board::device::ps2::data,\n"
-            "                                   board::device::ps2::clk, board::device::ps2::cs}${generated_semicolon_token}\n"
-            "    static ps2 controller{transport}${generated_semicolon_token}\n"
-            "    return controller${generated_semicolon_token}\n"
-            "}\n")
+        set(ps2_device_binding_body
+            "inline ::remotes::ps2::gpio gamepad_device{board::device::ps2::cmd, board::device::ps2::data, board::device::ps2::clk, board::device::ps2::cs}${generated_semicolon_token}\n")
     endif()
 endif()
 
-_pnx_write_generated("${BSP_BINDINGS_HPP}"
+_pnx_write_generated("${MODULE_BINDINGS_HPP}"
 "#pragma once\n"
 "// Generated from the selected board IOC and configuration. Do not edit.\n\n"
 "#include \"config.hpp\"\n\n"
@@ -1788,7 +1738,7 @@ _pnx_write_generated("${BSP_BINDINGS_HPP}"
 "${ps2_device_binding_body}"
 "} // namespace remoter::binding\n"
 "#endif // HAS_PS2_DEVICE\n")
-message(STATUS "Generated ${BSP_BINDINGS_HPP}")
+message(STATUS "Generated ${MODULE_BINDINGS_HPP}")
 
 set(bsp_bindings_cpp_includes "")
 set(bsp_bindings_cpp_body "")
@@ -1806,7 +1756,6 @@ endif()
 if(pwm_channel_count GREATER 0)
     string(APPEND bsp_bindings_cpp_includes
         "#include \"bsp_pwm_binding.hpp\"\n"
-        "#include \"bsp_pwm_failsafe_binding.hpp\"\n"
         "#include \"tim.h\"\n")
     string(APPEND bsp_bindings_cpp_body
 "namespace bsp::pwm::detail {\n\n"
@@ -1818,25 +1767,8 @@ if(pwm_channel_count GREATER 0)
 "    default: return false${generated_semicolon_token}\n"
 "    }\n"
 "}\n\n"
-"} // namespace bsp::pwm::detail\n\n"
-"namespace bsp::pwm::failsafe::detail {\n\n"
-"bool binding_for(channel channel_id, binding& out) noexcept\n"
-"{\n"
-"    switch (channel_id)\n"
-"    {\n"
-"${pwm_failsafe_binding_cases}"
-"    default: return false${generated_semicolon_token}\n"
-"    }\n"
-"}\n\n"
-"void keep_timers_running_while_debugging(channel channel_id) noexcept\n"
-"{\n"
-"    switch (channel_id)\n"
-"    {\n"
-"${pwm_failsafe_debug_cases}"
-"    default: return${generated_semicolon_token}\n"
-"    }\n"
-"}\n\n"
-"} // namespace bsp::pwm::failsafe::detail\n\n")
+"} // namespace bsp::pwm::detail\n\n")
+
 endif()
 if(adc_channel_count GREATER 0)
     string(APPEND bsp_bindings_cpp_includes
@@ -1906,11 +1838,10 @@ endif()
 
 _pnx_write_generated("${BSP_BINDINGS_CPP}"
 "// Generated from the selected board IOC. Do not edit.\n\n"
-"#include \"bsp_bindings.hpp\"\n"
+"#include \"config.hpp\"\n"
 "${bsp_bindings_cpp_includes}\n"
 "${bsp_bindings_cpp_body}")
 message(STATUS "Generated ${BSP_BINDINGS_CPP}")
-
 
 set(robot_motor_configs_body "")
 set(robot_motor_count 0)
@@ -2310,6 +2241,13 @@ if(robot_has_dm)
     endif()
 endif()
 
+if(NOT robot_dm_max_motors MATCHES "^[0-9]+$" OR robot_dm_max_motors LESS 1 OR robot_dm_max_motors GREATER 65535)
+    message(FATAL_ERROR "devices.motors.dm.max_motors must be an integer in [1, 65535]")
+endif()
+if(robot_motor_count GREATER 65535)
+    message(FATAL_ERROR "Motor count exceeds uint16_t capacity")
+endif()
+
 if(robot_motor_configs_body STREQUAL "")
     set(robot_motor_configs_body "// No motors are described in the robot device tree.\n")
 endif()
@@ -2320,16 +2258,16 @@ _pnx_write_generated("${ROBOT_CONFIG_HPP}"
 "#include \"config.hpp\"\n"
 "#include \"motor.hpp\"\n\n"
 "${robot_dmimu_include}\n"
-"#include <cstddef>\n"
-"#include <cstdint>\n\n"
+"#include <stddef.h>\n"
+"#include <stdint.h>\n\n"
 "namespace robot::motors {\n\n"
-"inline constexpr std::size_t motor_count = ${robot_motor_count};\n"
+"inline constexpr uint16_t motor_count = ${robot_motor_count};\n"
 "inline constexpr bool has_dji = ${robot_has_dji};\n"
 "inline constexpr bool has_dm = ${robot_has_dm};\n"
 "inline constexpr bool has_lk = ${robot_has_lk};\n"
 "inline constexpr bool has_xv2 = ${robot_has_xv2};\n"
 "inline constexpr bool has_other = ${robot_has_other};\n\n"
-"enum class model : std::uint8_t {\n"
+"enum class model : uint8_t {\n"
 "    unknown = 0,\n"
 "    dji_m2006,\n"
 "    dji_m3508,\n"
@@ -2341,9 +2279,9 @@ _pnx_write_generated("${ROBOT_CONFIG_HPP}"
 "    lk_lk9025,\n"
 "};\n\n"
 "namespace dm {\n"
-"inline constexpr std::uint32_t id_base = ${robot_dm_id_base}U;\n"
-"inline constexpr std::uint32_t master_id_base = ${robot_dm_master_id_base}U;\n"
-"inline constexpr std::size_t max_motors = ${robot_dm_max_motors};\n"
+"inline constexpr uint32_t id_base = ${robot_dm_id_base}U;\n"
+"inline constexpr uint32_t master_id_base = ${robot_dm_master_id_base}U;\n"
+"inline constexpr uint16_t max_motors = ${robot_dm_max_motors};\n"
 "} // namespace dm\n\n"
 "${robot_motor_configs_body}"
 "} // namespace robot::motors\n\n"

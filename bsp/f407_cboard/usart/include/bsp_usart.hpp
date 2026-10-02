@@ -6,7 +6,7 @@
 #include "tx_api.h"
 #include "usertypes.hpp"
 
-#include <cstddef>
+#include <stddef.h>
 
 namespace bsp::usart
 {
@@ -71,5 +71,7 @@ types::status transmit(port port, const uint8_t* data, size_t len, uint32_t time
 types::status start_rx_to_idle(port port, bsp::dma::buffer_view buffer, rx_callback callback,
                                TX_SEMAPHORE* notify_sem = nullptr);
 types::status restart_rx(port port);
+// Thread-context owner only: stops DMA before releasing buffer/callback references.
+types::status stop_rx(port port);
 
 } // namespace bsp::usart

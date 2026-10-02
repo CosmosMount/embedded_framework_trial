@@ -2,7 +2,7 @@
 
 #include "motor.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace motors
 {

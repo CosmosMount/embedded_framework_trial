@@ -4,9 +4,9 @@
 
 #include "constants.hpp"
 #include "constrain.hpp"
-#include "trans.hpp"
+#include "quantize.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 #include <atomic>
 #include <cstring>
 

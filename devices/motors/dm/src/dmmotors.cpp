@@ -22,9 +22,9 @@ void dmmotor::parse_feedback(const uint8_t* data, uint8_t len)
     const uint16_t v_int = static_cast<uint16_t>((data[3] << 4) | (data[4] >> 4));
     const uint16_t t_int = static_cast<uint16_t>(((data[4] & 0x0F) << 8) | data[5]);
 
-    fdb.position = math::uint_to_float(static_cast<int>(p_int), lim.position_min, lim.position_max, 16);
-    fdb.velocity = math::uint_to_float(static_cast<int>(v_int), lim.velocity_min, lim.velocity_max, 12);
-    fdb.torque = math::uint_to_float(static_cast<int>(t_int), lim.torque_min, lim.torque_max, 12);
+    fdb.position = math::dequantize(p_int, lim.position_min, lim.position_max, 16);
+    fdb.velocity = math::dequantize(v_int, lim.velocity_min, lim.velocity_max, 12);
+    fdb.torque = math::dequantize(t_int, lim.torque_min, lim.torque_max, 12);
     raw.temp_mos = static_cast<float>(data[6]);
     raw.temp_rotor = static_cast<float>(data[7]);
     fdb.temperature = raw.temp_rotor;
@@ -58,13 +58,13 @@ types::status dmmotor::emit_mit(float position, float velocity, float kp, float 
         return status == types::status::ok ? types::status::invalid_arg : status;
     }
     const float position_set = math::clamp(position, lim.position_min, lim.position_max);
-    const uint16_t pos_tmp = static_cast<uint16_t>(math::float_to_uint(
+    const uint16_t pos_tmp = static_cast<uint16_t>(math::quantize(
         position_set, lim.position_min, lim.position_max, 16));
-    const uint16_t vel_tmp = static_cast<uint16_t>(math::float_to_uint(
+    const uint16_t vel_tmp = static_cast<uint16_t>(math::quantize(
         math::clamp(velocity, lim.velocity_min, lim.velocity_max), lim.velocity_min, lim.velocity_max, 12));
-    const uint16_t kp_tmp = static_cast<uint16_t>(math::float_to_uint(math::clamp(kp, lim.kp_min, lim.kp_max), lim.kp_min, lim.kp_max, 12));
-    const uint16_t kd_tmp = static_cast<uint16_t>(math::float_to_uint(math::clamp(kd, lim.kd_min, lim.kd_max), lim.kd_min, lim.kd_max, 12));
-    const uint16_t tor_tmp = static_cast<uint16_t>(math::float_to_uint(
+    const uint16_t kp_tmp = static_cast<uint16_t>(math::quantize(math::clamp(kp, lim.kp_min, lim.kp_max), lim.kp_min, lim.kp_max, 12));
+    const uint16_t kd_tmp = static_cast<uint16_t>(math::quantize(math::clamp(kd, lim.kd_min, lim.kd_max), lim.kd_min, lim.kd_max, 12));
+    const uint16_t tor_tmp = static_cast<uint16_t>(math::quantize(
         math::clamp(torque, lim.torque_min, lim.torque_max), lim.torque_min, lim.torque_max, 12));
 
     output[0] = static_cast<uint8_t>(pos_tmp >> 8);

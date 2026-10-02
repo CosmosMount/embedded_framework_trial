@@ -4,7 +4,7 @@
 #include "tx_api.h"
 #include "usertypes.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 #include <cmath>
 
 namespace motors
@@ -25,8 +25,7 @@ enum class mode : uint8_t
     mit,
     pos_speed,
     speed,
-    multi,
-    voltage_raw,
+    voltage_raw = 7,
 };
 
 struct command
@@ -71,7 +70,7 @@ class api
 public:
     virtual ~api() = default;
 
-    virtual bool set_command(const command& next_command, mode next_mode) = 0;
+    virtual types::status set_command(const command& next_command, mode next_mode) = 0;
     // Returns a value snapshot. CAN feedback is written from its RX interrupt.
     virtual feedback get_feedback() const = 0;
     virtual state status() const = 0;
@@ -155,7 +154,7 @@ public:
 
     state alive_check();
 
-    bool set_command(const command& next_command, mode next_mode) override;
+    types::status set_command(const command& next_command, mode next_mode) override;
     feedback get_feedback() const override
     {
         // Both supported MCUs are single-core; mask the CAN writer only for the copy.
@@ -171,17 +170,17 @@ public:
     void relax() override;
 
     // Commands only update state; owner thread later calls set_output().
-    // False rejects unsupported/non-finite input and clears the pending command.
-    bool set_current_raw(int16_t current);
-    bool set_current_amperes(float amperes);
-    bool set_voltage_raw(int16_t voltage);
+    // Failure rejects the command and clears pending output; missing physical scaling is not_configured.
+    types::status set_current_raw(int16_t current);
+    types::status set_current_amperes(float amperes);
+    types::status set_voltage_raw(int16_t voltage);
     // A raw command unit can be current, voltage, or unsupported for this mode.
     virtual float command_units_per_ampere() const { return 0.0f; }
     virtual int32_t raw_command_limit() const { return 32767; }
-    bool set_torque(float torque);
-    bool set_mit(float position, float velocity, float kp, float kd, float torque);
-    bool set_pos_speed(float position, float velocity);
-    bool set_velocity(float velocity);
+    types::status set_torque(float torque);
+    types::status set_mit(float position, float velocity, float kp, float kd, float torque);
+    types::status set_pos_speed(float position, float velocity);
+    types::status set_velocity(float velocity);
 
     float torque_from_current(float current) const { return current * effective_torque_nm_per_command_unit(); }
     float current_from_torque(float torque) const
@@ -246,14 +245,24 @@ inline void motor::relax()
     cmd = {};
 }
 
-inline bool motor::set_command(const command& next_command, mode next_mode)
+inline types::status motor::set_command(const command& next_command, mode next_mode)
 {
-    if (!supports(next_mode) || !std::isfinite(next_command.torque) ||
+    if (next_mode == mode::torque && get_capabilities().current && !has_torque_calibration())
+    {
+        relax();
+        return types::status::not_configured;
+    }
+    if (!supports(next_mode))
+    {
+        relax();
+        return types::status::not_configured;
+    }
+    if (!std::isfinite(next_command.torque) ||
         !std::isfinite(next_command.position) || !std::isfinite(next_command.velocity) ||
         !std::isfinite(next_command.kp) || !std::isfinite(next_command.kd))
     {
         relax();
-        return false;
+        return types::status::invalid_arg;
     }
     if ((next_mode == mode::current &&
          (next_command.current < -raw_command_limit() || next_command.current > raw_command_limit())) ||
@@ -261,7 +270,7 @@ inline bool motor::set_command(const command& next_command, mode next_mode)
          (next_command.voltage_raw < -raw_command_limit() || next_command.voltage_raw > raw_command_limit())))
     {
         relax();
-        return false;
+        return types::status::invalid_arg;
     }
     cmd = next_command;
     if (next_mode == mode::torque && get_capabilities().current)
@@ -271,12 +280,12 @@ inline bool motor::set_command(const command& next_command, mode next_mode)
         if (!std::isfinite(raw_current) || raw_current < -raw_command_limit() || raw_current > raw_command_limit())
         {
             relax();
-            return false;
+            return types::status::invalid_arg;
         }
         cmd.current = static_cast<int16_t>(raw_current);
     }
     control_mode = next_mode;
-    return true;
+    return types::status::ok;
 }
 
 inline bool motor::supports(mode request_mode) const
@@ -298,48 +307,51 @@ inline bool motor::supports(mode request_mode) const
             return caps.velocity;
         case mode::voltage_raw:
             return caps.voltage_raw;
-        case mode::multi:
-            return false;
         default:
             return false;
     }
 }
 
-inline bool motor::set_current_raw(int16_t current)
+inline types::status motor::set_current_raw(int16_t current)
 {
     command next{};
     next.current = current;
     return set_command(next, mode::current);
 }
 
-inline bool motor::set_current_amperes(float amperes)
+inline types::status motor::set_current_amperes(float amperes)
 {
     const float scale = command_units_per_ampere();
+    if (scale <= 0.0f)
+    {
+        relax();
+        return types::status::not_configured;
+    }
     const float raw = amperes * scale;
-    if (!std::isfinite(amperes) || !std::isfinite(raw) || scale <= 0.0f ||
+    if (!std::isfinite(amperes) || !std::isfinite(raw) ||
         raw < -raw_command_limit() || raw > raw_command_limit())
     {
         relax();
-        return false;
+        return types::status::invalid_arg;
     }
     return set_current_raw(static_cast<int16_t>(raw));
 }
 
-inline bool motor::set_voltage_raw(int16_t voltage)
+inline types::status motor::set_voltage_raw(int16_t voltage)
 {
     command next{};
     next.voltage_raw = voltage;
     return set_command(next, mode::voltage_raw);
 }
 
-inline bool motor::set_torque(float torque)
+inline types::status motor::set_torque(float torque)
 {
     command next{};
     next.torque = torque;
     return set_command(next, mode::torque);
 }
 
-inline bool motor::set_mit(float position, float velocity, float kp, float kd, float torque)
+inline types::status motor::set_mit(float position, float velocity, float kp, float kd, float torque)
 {
     command next{};
     next.position = position;
@@ -350,7 +362,7 @@ inline bool motor::set_mit(float position, float velocity, float kp, float kd, f
     return set_command(next, mode::mit);
 }
 
-inline bool motor::set_pos_speed(float position, float velocity)
+inline types::status motor::set_pos_speed(float position, float velocity)
 {
     command next{};
     next.position = position;
@@ -358,7 +370,7 @@ inline bool motor::set_pos_speed(float position, float velocity)
     return set_command(next, mode::pos_speed);
 }
 
-inline bool motor::set_velocity(float velocity)
+inline types::status motor::set_velocity(float velocity)
 {
     command next{};
     next.velocity = velocity;

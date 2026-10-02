@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace types
 {
@@ -12,10 +12,7 @@ namespace types
         invalid_arg,
         busy,
         not_initialized,
-        not_connected,
-        empty,
-        too_large,
-        invalid_context,
+        timeout,
     };
 
 };

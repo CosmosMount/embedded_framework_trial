@@ -1,290 +1,208 @@
 #include "remoter.hpp"
 
-#include "bsp_bindings.hpp"
-#include "config.hpp"
-#include "types.hpp"
+#include <cstring>
 
 namespace remoter
 {
 namespace
 {
-
-struct source_cache
-{
-    state data{};
-    ULONG tick = 0;
-    bool seen = false;
-};
-
-bool source_online(const source_cache& source, ULONG now, ULONG timeout_ticks)
-{
-    return source.seen && !source.data.offline && (now - source.tick) <= timeout_ticks;
-}
-
-source choose_source(source active,
-                     const source_cache& dr16,
-                     const source_cache& vt03,
-                     const source_cache& ps2,
-                     const source_cache& ps2_uart,
-                     ULONG now,
-                     ULONG timeout_ticks)
-{
-    const bool dr16_online = source_online(dr16, now, timeout_ticks);
-    const bool vt03_online = source_online(vt03, now, timeout_ticks);
-    const bool ps2_online = source_online(ps2, now, timeout_ticks);
-    const bool ps2_uart_online = source_online(ps2_uart, now, timeout_ticks);
-
-    if (active == source::dr16 && dr16_online)
-    {
-        return active;
-    }
-    if (active == source::vt03 && vt03_online)
-    {
-        return active;
-    }
-    if (active == source::ps2 && ps2_online)
-    {
-        return active;
-    }
-    if (active == source::ps2_uart && ps2_uart_online)
-    {
-        return active;
-    }
-    if (dr16_online)
-    {
-        return source::dr16;
-    }
-    if (vt03_online)
-    {
-        return source::vt03;
-    }
-    if (ps2_online)
-    {
-        return source::ps2;
-    }
-    if (ps2_uart_online)
-    {
-        return source::ps2_uart;
-    }
-    return source::none;
-}
-
+#if ENABLE_DR16
+bsp::dma::buffer<remotes::dr16::frame_size> dr16_buffer BSP_DMA_BUFFER{};
+#endif
+#if ENABLE_VT03
+bsp::dma::buffer<remotes::vt03::frame_size> vt03_buffer BSP_DMA_BUFFER{};
+#endif
 } // namespace
 
-service& service::instance()
+selector& selector::instance()
 {
-    static service inst;
+    static selector inst;
     return inst;
 }
 
-bool service::create_resources()
+types::status selector::init(const selector_config& cfg)
 {
-    if (msg::init(output_) != types::status::ok)
-    {
-        return false;
-    }
-
-    if constexpr (::config::feature::enable_dr16)
-    {
-        dr16_sub_ = msg::subscribe(dr16::instance().output());
-    }
-    if constexpr (::config::feature::enable_vt03)
-    {
-        vt03_sub_ = msg::subscribe(vt03::instance().output());
-    }
-#if ENABLE_PS2
-    ps2_sub_ = msg::subscribe(binding::ps2_instance().output());
-#endif
-    if constexpr (::config::feature::enable_ps2_uart)
-    {
-        ps2_uart_sub_ = msg::subscribe(ps2_uart::instance().output());
-    }
-    bool sources_ready =
-        (!::config::feature::enable_dr16 || dr16_sub_.valid()) &&
-        (!::config::feature::enable_vt03 || vt03_sub_.valid()) &&
-        (!::config::feature::enable_ps2_uart || ps2_uart_sub_.valid());
-#if ENABLE_PS2
-    sources_ready = sources_ready && ps2_sub_.valid();
-#endif
-    if (!sources_ready)
-    {
-        return false;
-    }
-
-    if (tx_thread_create(&thread_, const_cast<CHAR*>("remoter"), merge_thread_entry,
-                         reinterpret_cast<ULONG>(this), stack_, sizeof(stack_),
-                         params::remoter::thread_priority + 1U,
-                         params::remoter::thread_priority + 1U, TX_NO_TIME_SLICE,
-                         TX_AUTO_START) != TX_SUCCESS)
-    {
-        return false;
-    }
-
-    return true;
-}
-
-types::status service::init(const config& cfg)
-{
-    if (initialized_)
-    {
-        return types::status::ok;
-    }
-    cfg_ = cfg;
-    bool any_source = false;
-    if constexpr (::config::feature::enable_dr16)
-    {
-        const types::status status = dr16::instance().init();
-        if (status != types::status::ok)
-        {
-            return status;
-        }
-    }
-    any_source = any_source || ::config::feature::enable_dr16;
-
-    if constexpr (::config::feature::enable_vt03)
-    {
-        const types::status status = vt03::instance().init();
-        if (status != types::status::ok)
-        {
-            return status;
-        }
-    }
-    any_source = any_source || ::config::feature::enable_vt03;
-
-#if ENABLE_PS2
-    {
-        const types::status status = binding::ps2_instance().init();
-        if (status != types::status::ok)
-        {
-            return status;
-        }
-    }
-#endif
-    any_source = any_source || ::config::feature::enable_ps2;
-
-    if constexpr (::config::feature::enable_ps2_uart)
-    {
-        const types::status status = ps2_uart::instance().init();
-        if (status != types::status::ok)
-        {
-            return status;
-        }
-    }
-    any_source = any_source || ::config::feature::enable_ps2_uart;
-
-    if (!any_source)
-    {
+    if (initialization_status_ != types::status::not_initialized)
+        return initialization_status_;
+    if constexpr (!(::config::feature::enable_dr16 || ::config::feature::enable_vt03 ||
+                    ::config::feature::enable_ps2))
         return types::status::not_configured;
-    }
-    if (!create_resources())
+
+    cfg_ = cfg;
+    initialization_status_ = types::status::busy;
+    auto result = msg::init(output_);
+    if (result != types::status::ok)
+        return initialization_status_ = result;
+    if (tx_thread_create(&thread_, const_cast<CHAR*>("remoter"), thread_entry,
+                         reinterpret_cast<ULONG>(this), stack_, sizeof(stack_),
+                         params::remoter::thread_priority, params::remoter::thread_priority,
+                         TX_NO_TIME_SLICE, TX_DONT_START) != TX_SUCCESS)
     {
-        return types::status::error;
+        (void)msg::deinit(output_);
+        return initialization_status_ = types::status::error;
     }
 
-    initialized_ = true;
-    return types::status::ok;
+#if ENABLE_DR16
+    dr16_frame_.tick = dr16_restart_tick_ = static_cast<uint32_t>(tx_time_get());
+    result = bsp::usart::init(app::uart::dr16, bsp::usart::mode::dma);
+    if (result == types::status::ok)
+        result = bsp::usart::start_rx_to_idle(app::uart::dr16, dr16_buffer.view(),
+            bsp::usart::rx_callback::bind<selector, &selector::on_rx>(this));
+    dr16_owned_ = result == types::status::ok;
+#endif
+#if ENABLE_VT03
+    if (result == types::status::ok)
+        result = bsp::usart::init(app::uart::vt03, bsp::usart::mode::dma);
+    if (result == types::status::ok)
+    {
+        result = bsp::usart::start_rx_to_idle(app::uart::vt03, vt03_buffer.view(),
+            bsp::usart::rx_callback::bind<selector, &selector::on_rx>(this));
+        vt03_owned_ = result == types::status::ok;
+    }
+#endif
+#if ENABLE_PS2
+    if (result == types::status::ok)
+        result = gamepad::instance().init();
+    if (result == types::status::ok)
+    {
+        ps2_sub_ = msg::subscribe(gamepad::instance().output());
+        if (!ps2_sub_.valid()) result = types::status::error;
+    }
+#endif
+    if (result == types::status::ok && tx_thread_resume(&thread_) == TX_SUCCESS)
+        return initialization_status_ = types::status::ok;
+    if (result == types::status::ok) result = types::status::error;
+
+    // Only undo this attempt's UART ownership. Callback mailboxes and DMA buffers
+    // have static lifetime even if stop fails; callbacks do not access RTOS objects.
+#if ENABLE_DR16
+    if (dr16_owned_)
+    {
+        const auto stopped = bsp::usart::stop_rx(app::uart::dr16);
+        if (stopped == types::status::ok) dr16_owned_ = false;
+        else result = stopped;
+    }
+#endif
+#if ENABLE_VT03
+    if (vt03_owned_)
+    {
+        const auto stopped = bsp::usart::stop_rx(app::uart::vt03);
+        if (stopped == types::status::ok) vt03_owned_ = false;
+        else result = stopped;
+    }
+#endif
+    (void)tx_thread_delete(&thread_);
+    (void)msg::deinit(output_);
+    return initialization_status_ = result;
 }
 
-void service::merge_thread_entry(ULONG arg)
+void selector::on_rx(bsp::usart::port port, const bsp::usart::rx_frame& frame)
 {
-    auto* self = reinterpret_cast<service*>(arg);
-    if (self == nullptr)
+    pending_frame* pending = nullptr;
+    uint8_t expected_size = 0;
+#if ENABLE_DR16
+    if (port == app::uart::dr16)
     {
-        self = &instance();
+        pending = &dr16_frame_;
+        expected_size = remotes::dr16::frame_size;
     }
+#endif
+#if ENABLE_VT03
+    if (port == app::uart::vt03)
+    {
+        pending = &vt03_frame_;
+        expected_size = remotes::vt03::frame_size;
+    }
+#endif
+    (void)port;
+    if (pending == nullptr || frame.data == nullptr || frame.len != expected_size)
+        return;
+    std::memcpy(pending->bytes, frame.data, expected_size);
+    pending->tick = static_cast<uint32_t>(tx_time_get());
+    pending->size = expected_size;
+}
 
-    source_cache dr16{};
-    source_cache vt03{};
-    source_cache ps2{};
-    source_cache ps2_uart{};
+uint8_t selector::pending_frame::take(uint8_t* destination, uint32_t& received_tick)
+{
+    TX_INTERRUPT_SAVE_AREA
+    TX_DISABLE
+    const uint8_t count = size;
+    std::memcpy(destination, bytes, count);
+    received_tick = tick;
+    size = 0;
+    TX_RESTORE
+    return count;
+}
+
+void selector::thread_entry(ULONG arg)
+{
+    auto* self = reinterpret_cast<selector*>(arg);
+    // Whole-input priority: VT03, DR16; PS2 modes are configured independently.
+    state inputs[3]{};
     state output{};
-    source active = source::none;
-    uint32_t update_count = 0;
-
     for (;;)
     {
+#if ENABLE_DR16 || ENABLE_VT03
+        uint8_t frame[remotes::vt03::frame_size]{};
+        uint32_t received_tick = 0;
+        remotes::reading sample{};
+#endif
+#if ENABLE_VT03
+        const auto vt03_size = self->vt03_frame_.take(frame, received_tick);
+        if (vt03_size != 0 && remotes::vt03::decode(frame, vt03_size, sample) == types::status::ok)
         {
-            dr16_state dr16_msg{};
-            if (msg::read(self->dr16_sub_, dr16_msg) == types::status::ok)
+            auto& input = inputs[0];
+            // Function-key edges are module policy, independent of wire decoding.
+            sample.right_sw = input.right_sw;
+            if (sample.fn_1 && !input.fn_1) sample.right_sw = sw_state::low;
+            else if (sample.fn_2 && !input.fn_2)
             {
-                dr16.data = dr16_msg.data;
-                dr16.tick = tx_time_get();
-                dr16.seen = true;
+                switch (input.right_sw)
+                {
+                case sw_state::low: sample.right_sw = sw_state::mid; break;
+                case sw_state::mid: sample.right_sw = sw_state::up; break;
+                case sw_state::up: sample.right_sw = sw_state::low; break;
+                }
             }
+            static_cast<remotes::reading&>(input) = sample;
+            input.received_tick = received_tick;
+            input.active_source = source::vt03;
+            input.offline = false;
         }
-
+#endif
+#if ENABLE_DR16
+        const auto dr16_size = self->dr16_frame_.take(frame, received_tick);
+        if (dr16_size != 0 && remotes::dr16::decode(frame, dr16_size, sample) == types::status::ok)
         {
-            vt03_state vt03_msg{};
-            if (msg::read(self->vt03_sub_, vt03_msg) == types::status::ok)
-            {
-                vt03.data = vt03_msg.data;
-                vt03.tick = tx_time_get();
-                vt03.seen = true;
-            }
+            auto& input = inputs[1];
+            static_cast<remotes::reading&>(input) = sample;
+            input.received_tick = received_tick;
+            input.active_source = source::dr16;
+            input.offline = false;
         }
-
+        // Preserve DR16's bounded idle recovery, without a dedicated worker.
+        const uint32_t now = static_cast<uint32_t>(tx_time_get());
+        if (static_cast<uint32_t>(now - received_tick) >= params::remoter::rx_timeout_ticks &&
+            static_cast<uint32_t>(now - self->dr16_restart_tick_) >= params::remoter::rx_timeout_ticks)
         {
-            ps2_state ps2_msg{};
-            if (msg::read(self->ps2_sub_, ps2_msg) == types::status::ok)
-            {
-                ps2.data = ps2_msg.data;
-                ps2.tick = tx_time_get();
-                ps2.seen = true;
-            }
+            inputs[1].offline = true;
+            self->dr16_restart_tick_ = now;
+            if (self->dr16_owned_ && bsp::usart::stop_rx(app::uart::dr16) == types::status::ok)
+                self->dr16_owned_ = false;
+            if (!self->dr16_owned_)
+                self->dr16_owned_ = bsp::usart::start_rx_to_idle(app::uart::dr16, dr16_buffer.view(),
+                    bsp::usart::rx_callback::bind<selector, &selector::on_rx>(self)) == types::status::ok;
         }
-
-        {
-            ps2_uart_state ps2_uart_msg{};
-            if (msg::read(self->ps2_uart_sub_, ps2_uart_msg) == types::status::ok)
-            {
-                ps2_uart.data = ps2_uart_msg.data;
-                ps2_uart.tick = tx_time_get();
-                ps2_uart.seen = true;
-            }
-        }
-
-        const ULONG now = tx_time_get();
-        active = choose_source(active, dr16, vt03, ps2, ps2_uart, now,
-                               params::remoter::offline_timeout_ticks);
-
-        switch (active)
-        {
-        case source::dr16:
-            output = dr16.data;
-            output.active_source = active;
-            output.offline = false;
-            break;
-        case source::vt03:
-            output = vt03.data;
-            output.active_source = active;
-            output.offline = false;
-            break;
-        case source::ps2:
-            output = ps2.data;
-            output.active_source = active;
-            output.offline = false;
-            break;
-        case source::ps2_uart:
-            output = ps2_uart.data;
-            output.active_source = active;
-            output.offline = false;
-            break;
-        default:
-            output = {};
-            output.offline = true;
-            output.active_source = source::none;
-            break;
-        }
-
-        output.update_count = ++update_count;
+#endif
+#if ENABLE_PS2
+        gamepad_state ps2{};
+        if (msg::read(self->ps2_sub_, ps2) == types::status::ok)
+            inputs[2] = ps2.data;
+#endif
+        output = select_input(inputs, output, static_cast<uint32_t>(tx_time_get()),
+                              params::remoter::offline_timeout_ticks);
         msg::publish(self->output_, output);
-        if (self->cfg_.on_update_callback)
-        {
-            self->cfg_.on_update_callback(output);
-        }
-        output.last_left_sw = output.left_sw;
-        output.last_right_sw = output.right_sw;
-        output.last_key = output.key;
+        if (self->cfg_.on_update) self->cfg_.on_update(output);
         tx_thread_sleep(1);
     }
 }

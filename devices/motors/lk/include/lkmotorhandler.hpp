@@ -3,7 +3,7 @@
 #include "lkmotors.hpp"
 #include "motorhandler.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 #include <cstring>
 
 namespace motors
@@ -18,7 +18,7 @@ public:
     static lkmotorhandler& instance();
 
     protocol supported_protocol() const noexcept override { return protocol::lk; }
-    bool register_motor(motor& device) noexcept override;
+    types::status register_motor(motor& device) noexcept override;
     types::status stop() noexcept override;
     types::status send_control() noexcept override;
 

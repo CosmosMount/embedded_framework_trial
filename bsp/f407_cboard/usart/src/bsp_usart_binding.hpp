@@ -4,13 +4,13 @@
 #include "dma.h"
 #include "usart.h"
 
-#include <cstddef>
+#include <stddef.h>
 
 namespace bsp::usart
 {
 
-UART_HandleTypeDef* handle_of(std::size_t index) noexcept;
-std::size_t index_of(UART_HandleTypeDef* handle) noexcept;
+UART_HandleTypeDef* handle_of(uint8_t index) noexcept;
+uint8_t index_of(UART_HandleTypeDef* handle) noexcept;
 void setup_dma(UART_HandleTypeDef* handle) noexcept;
 void receive(UART_HandleTypeDef* handle, uint16_t size);
 void handle_error(UART_HandleTypeDef* handle);

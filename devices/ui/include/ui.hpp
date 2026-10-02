@@ -3,9 +3,8 @@
 #include "bsp_usart.hpp"
 #include "config.hpp"
 #include "crc.hpp"
-#include "memory.h"
 
-#include <cstdint>
+#include <stdint.h>
 #include <cstring>
 
 namespace ui
@@ -44,10 +43,10 @@ enum class operation : uint8_t
     remove,
 };
 
-enum class id_error_code : int32_t
+enum class id_error_code : int8_t
 {
     no_more_space = -1,
-    mutex_timeout = -2,
+    invalid_arg = -2,
 };
 
 struct config
@@ -75,6 +74,7 @@ public:
                         float value);
     int8_t create_int(int width, object_color color, int layer, int x, int y, int font_size,
                       int value);
+    // Text is borrowed: keep it alive until the object is removed or replaced.
     int8_t create_string(int width, object_color color, int layer, int x, int y, int font_size,
                          const char* str);
 
@@ -94,10 +94,11 @@ public:
     void set_string(int id, const char* str);
 
     void remove(int id);
-    void remove_all();
-    void remove_layer(int layer);
+    types::status remove_all();
+    types::status remove_layer(int layer);
 
-    void update();
+    // One frame per call. Failed submissions retain pending object changes.
+    types::status update();
 
 private:
     struct tx_frame_header
@@ -215,37 +216,19 @@ private:
 
     config cfg_{};
     uint32_t increase_id_ = 1;
-    bool pending_string_update_ = false;
-    uint8_t pending_string_index_ = 0;
     uint8_t scan_offset_ = 0;
     bool initialized_ = false;
 
     tx_frame_header* frame_header();
     official_ui_object* buffer_nth_object(uint8_t index);
     static bool valid_object_id(int id);
-
-    template <typename Callback>
-    void loop_scan_objects(uint8_t from_index, uint8_t until_index, Callback cb)
-    {
-        const uint8_t upper_bound =
-            (until_index <= from_index) ? static_cast<uint8_t>(until_index + total_count)
-                                        : until_index;
-        for (uint8_t i = from_index; i < upper_bound; ++i)
-        {
-            if (!cb(i % total_count, object_list_[i % total_count]))
-            {
-                break;
-            }
-        }
-    }
-
-    void loop_increment(uint8_t& index) { index = static_cast<uint8_t>((index + 1) % total_count); }
+    static uint8_t string_length(const char* text);
 
     int8_t create_and_init_object();
 
-    void send_data(uint8_t* data, uint16_t len);
-    void transmit_string_object(uint8_t index, operation op);
-    void transmit_other_objects(uint8_t count);
+    types::status send_data(uint8_t* data, uint16_t len);
+    types::status transmit_string_object(uint8_t index, operation op);
+    types::status transmit_other_objects(uint8_t count);
 };
 
 } // namespace ui

@@ -3,7 +3,7 @@
 #include "motorhandler.hpp"
 #include "xv2motors.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace motors
 {
@@ -14,7 +14,7 @@ public:
     static xv2motorhandler& instance();
 
     protocol supported_protocol() const noexcept override { return protocol::xv2; }
-    bool register_motor(motor& device) noexcept override;
+    types::status register_motor(motor& device) noexcept override;
     types::status stop() noexcept override;
     types::status send_control() noexcept override;
 

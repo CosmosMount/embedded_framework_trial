@@ -48,6 +48,14 @@ struct communication_status
     uint32_t rx_dropped_bytes = 0;
 };
 
+struct snapshot
+{
+    packet_store packets{};
+    communication_status communication{};
+    uint32_t sequence = 0;
+    uint32_t received_tick = 0;
+};
+
 using update_callback = core::callback<void(const packet_store&, const update_info&)>;
 
 struct config
@@ -56,7 +64,7 @@ struct config
     uint32_t thread_priority = params::referee::thread_priority;
     // Invoked synchronously in the referee receive thread after a valid frame is processed.
     // The callback must not block. Configuration is fixed by the first successful init().
-    update_callback on_update_callback{};
+    update_callback on_update{};
 };
 
 static_assert(std::is_trivially_copyable_v<robot_interaction_data>);
@@ -64,20 +72,20 @@ static_assert(std::is_trivially_copyable_v<packet_store>);
 static_assert(std::is_trivially_copyable_v<update_info>);
 static_assert(std::is_trivially_copyable_v<communication_status>);
 
-class service
+class receiver
 {
 public:
-    static service& instance();
+    static receiver& instance();
 
     types::status init(const config& cfg = {});
     TX_SEMAPHORE* heartbeat_sem() { return &heartbeat_sem_; }
-    const packet_store& packets() const noexcept { return packets_; }
-    const communication_status& status() const noexcept { return status_; }
+    // Capture once at the control-cycle boundary and share the resulting const value.
+    snapshot read_snapshot() const noexcept;
 
 private:
-    static void referee_thread_entry(ULONG arg);
-    bool create_resources();
-    static void referee_rx_callback(bsp::usart::port port, const bsp::usart::rx_frame& frame);
+    static void thread_entry(ULONG arg);
+    types::status create_resources();
+    static void on_rx(bsp::usart::port port, const bsp::usart::rx_frame& frame);
 
     config cfg_{};
     TX_THREAD thread_{};
@@ -85,9 +93,9 @@ private:
     alignas(8) uint8_t stack_[1536]{};
 
     RefereeRingBuffer rx_fifo_{};
-    packet_store packets_{};
-    communication_status status_{};
-    bool initialized_ = false;
+    snapshot working_{};
+    snapshot published_{};
+    types::status initialization_status_ = types::status::not_initialized;
 };
 
 } // namespace referee

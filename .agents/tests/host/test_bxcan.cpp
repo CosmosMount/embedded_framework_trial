@@ -1,5 +1,6 @@
 #include "bsp_can.hpp"
 #include "bsp_can_binding.hpp"
+#include "log.hpp"
 #include <array>
 #include <cstring>
 #include <iostream>
@@ -13,7 +14,7 @@ CAN_TxHeaderTypeDef transmitted{}, incoming{};
 std::array<uint8_t,8> bytes{};
 unsigned received=0, pending=0, stopped=0, errors=0;
 uint32_t mailboxes=3;
-HAL_StatusTypeDef notify_result=HAL_OK, transmit_result=HAL_OK;
+HAL_StatusTypeDef notify_result=HAL_OK, transmit_result=HAL_OK, start_result=HAL_OK;
 void require(bool value, const char* message)
 {
     if (!value) throw std::runtime_error(message);
@@ -38,7 +39,7 @@ UINT tx_semaphore_create(TX_SEMAPHORE*, CHAR*, ULONG) { return TX_SUCCESS; }
 UINT tx_semaphore_put(TX_SEMAPHORE*) { ++errors; return TX_SUCCESS; }
 HAL_StatusTypeDef HAL_CAN_ConfigFilter(CAN_HandleTypeDef*, CAN_FilterTypeDef* value)
 { filter=*value; return HAL_OK; }
-HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef*) { return HAL_OK; }
+HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef*) { return start_result; }
 HAL_StatusTypeDef HAL_CAN_Stop(CAN_HandleTypeDef*) { ++stopped; return HAL_OK; }
 HAL_StatusTypeDef HAL_CAN_ActivateNotification(CAN_HandleTypeDef*, uint32_t) { return notify_result; }
 uint32_t HAL_CAN_GetTxMailboxesFreeLevel(CAN_HandleTypeDef*) { return mailboxes; }
@@ -49,6 +50,7 @@ HAL_StatusTypeDef HAL_CAN_GetRxMessage(CAN_HandleTypeDef*, uint32_t, CAN_RxHeade
 { --pending; *value=incoming; data[0]=42; return HAL_OK; }
 extern "C" void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef*);
 extern "C" void HAL_CAN_ErrorCallback(CAN_HandleTypeDef*);
+ULONG tx_time_get() { return 0U; }
 int main()
 {
     try
@@ -58,7 +60,8 @@ int main()
         auto invalid=static_cast<bus>(bus_count);
         uint8_t data[8]{42};
         require(init(invalid)==types::status::invalid_arg,"invalid bus");
-        require(transmit(first,0x201,data,8)==types::status::error,"uninitialized bus");
+        logging::init();
+        require(transmit(first,0x201,data,8)==types::status::not_initialized,"uninitialized bus");
         require(register_rx_callback(first,rx_callback::bind<&on_frame>())==types::status::ok,"register");
         require(init(first)==types::status::ok,"initialize CAN1");
         require(filter.FilterBank==0 && filter.SlaveStartFilterBank==14 &&
@@ -89,8 +92,13 @@ int main()
         CAN_HandleTypeDef unknown{nullptr}; pending=1;
         HAL_CAN_RxFifo0MsgPendingCallback(&unknown);
         require(pending==1,"unknown handle does not alias bus zero");
+        handles[0].ErrorCode=HAL_CAN_ERROR_BOF; start_result=HAL_ERROR;
         HAL_CAN_ErrorCallback(&handles[0]);
-        require(errors==1 && err_sem(first)!=nullptr,"error notification");
+        require(errors==1 && err_sem(first)!=nullptr && current_status(first)==types::status::error,
+                "failed automatic recovery remains observable");
+        start_result=HAL_OK;
+        require(init(first)==types::status::ok && current_status(first)==types::status::ok,
+                "initialization retries failed automatic recovery");
         unregister_rx_callbacks(first); incoming.RTR=CAN_RTR_DATA;
         HAL_CAN_RxFifo0MsgPendingCallback(&handles[0]);
         require(received==3,"unregister");

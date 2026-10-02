@@ -35,8 +35,7 @@
     "pwm_channels": {
       "bmi088_heater": {
         "timer": "tim3",
-        "channel": 4,
-        "failsafe_timer": "tim6"
+        "channel": 4
       }
     }
   },

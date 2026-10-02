@@ -3,14 +3,14 @@
 #include "usertypes.hpp"
 #include "tx_api.h"
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 #include <type_traits>
 
 namespace msg
 {
 
-inline constexpr std::uint8_t max_subscribers_per_topic = 8U;
+inline constexpr uint8_t max_subscribers_per_topic = 8U;
 
 struct subscriber_slot
 {
@@ -21,11 +21,11 @@ struct subscriber_slot
 struct topic_layout
 {
     TX_MUTEX lock{};
-    std::size_t payload_size = 0U;
-    std::size_t payload_alignment = 0U;
-    std::uint8_t* payload_bytes = nullptr;
+    size_t payload_size = 0U;
+    size_t payload_alignment = 0U;
+    uint8_t* payload_bytes = nullptr;
     subscriber_slot subscribers[max_subscribers_per_topic]{};
-    std::uint8_t subscriber_count = 0U;
+    uint8_t subscriber_count = 0U;
     bool initialized = false;
 };
 
@@ -35,18 +35,19 @@ struct topic_storage : topic_layout
     alignas(Payload) Payload payload{};
 };
 
-// Thread/initialization only. ISR publication returns invalid_context even with
+// Read and default publish never wait; contention returns busy without consuming data.
+// Thread/initialization only. ISR publication returns invalid_arg even with
 // block=false; use an ISR-safe queue/notification and publish from a thread.
 struct publish_opts
 {
-    bool block = true;
+    bool block = false;
     bool from_isr = false;
 };
 
 struct subscriber
 {
     topic_layout* layout = nullptr;
-    std::uint8_t slot_index = 0xFFU;
+    uint8_t slot_index = 0xFFU;
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -59,15 +60,13 @@ struct subscriber
     }
 };
 
-types::status init() noexcept;
-
 namespace detail
 {
 
 types::status initialize_topic(topic_layout& layout) noexcept;
 types::status deinitialize_topic(topic_layout& layout) noexcept;
 subscriber subscribe(topic_layout& layout) noexcept;
-types::status publish(topic_layout& layout, const void* data, std::size_t size,
+types::status publish(topic_layout& layout, const void* data, size_t size,
                       publish_opts opts) noexcept;
 
 } // namespace detail
@@ -108,7 +107,7 @@ types::status init(channel<Payload>& topic) noexcept
     auto& storage = static_cast<topic_storage<Payload>&>(layout);
     layout.payload_size = sizeof(Payload);
     layout.payload_alignment = alignof(Payload);
-    layout.payload_bytes = reinterpret_cast<std::uint8_t*>(&storage.payload);
+    layout.payload_bytes = reinterpret_cast<uint8_t*>(&storage.payload);
     return detail::initialize_topic(layout);
 }
 
@@ -135,7 +134,7 @@ types::status publish(channel<Payload>& topic, const Payload& data,
 
 // Nonblocking hint: false also means lock contention. read() is authoritative.
 bool available(subscriber sub) noexcept;
-types::status read(subscriber sub, void* buffer, std::size_t size) noexcept;
+types::status read(subscriber sub, void* buffer, size_t size) noexcept;
 
 template <typename Payload>
 types::status read(subscriber sub, Payload& output) noexcept

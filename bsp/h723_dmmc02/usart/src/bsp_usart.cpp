@@ -1,9 +1,7 @@
 #include "bsp_usart.hpp"
 #include "bsp_usart_binding.hpp"
 
-#include "memory.h"
-
-#include <cstdint>
+#include <stdint.h>
 #include <cstring>
 #include <limits>
 
@@ -11,7 +9,7 @@ namespace
 {
 
 constexpr uint16_t dma_tx_stage_size = 256;
-constexpr std::uintptr_t dcache_line_size = bsp::dma::cache_line_size;
+constexpr uintptr_t dcache_line_size = bsp::dma::cache_line_size;
 
 struct port_state
 {
@@ -29,7 +27,7 @@ bsp::dma::buffer<dma_tx_stage_size> tx_dma_stage_buffers[bsp::usart::port_count]
 
 port_state* state_of(bsp::usart::port port)
 {
-    if (static_cast<std::uint8_t>(port) >= bsp::usart::port_count)
+    if (static_cast<uint8_t>(port) >= bsp::usart::port_count)
     {
         return nullptr;
     }
@@ -39,7 +37,7 @@ port_state* state_of(bsp::usart::port port)
 
 bsp::dma::buffer<dma_tx_stage_size>* tx_dma_stage_of(bsp::usart::port port)
 {
-    if (static_cast<std::uint8_t>(port) >= bsp::usart::port_count)
+    if (static_cast<uint8_t>(port) >= bsp::usart::port_count)
     {
         return nullptr;
     }
@@ -47,18 +45,18 @@ bsp::dma::buffer<dma_tx_stage_size>* tx_dma_stage_of(bsp::usart::port port)
     return &tx_dma_stage_buffers[port];
 }
 
-std::uintptr_t align_down(std::uintptr_t value, std::uintptr_t alignment)
+uintptr_t align_down(uintptr_t value, uintptr_t alignment)
 {
     return value & ~(alignment - 1U);
 }
 
-std::uintptr_t align_up(std::uintptr_t value, std::uintptr_t alignment)
+uintptr_t align_up(uintptr_t value, uintptr_t alignment)
 {
     return (value + alignment - 1U) & ~(alignment - 1U);
 }
 
 [[maybe_unused]] bool cache_range_in_owner(bsp::dma::buffer_view buffer, size_t offset, size_t len,
-                          std::uintptr_t& aligned_start, std::uintptr_t& aligned_end)
+                          uintptr_t& aligned_start, uintptr_t& aligned_end)
 {
     if (buffer.data() == nullptr || buffer.capacity() == 0U || offset > buffer.capacity() ||
         len > buffer.capacity() - offset)
@@ -66,22 +64,22 @@ std::uintptr_t align_up(std::uintptr_t value, std::uintptr_t alignment)
         return false;
     }
 
-    const std::uintptr_t owner_start = reinterpret_cast<std::uintptr_t>(buffer.data());
-    if (owner_start > std::numeric_limits<std::uintptr_t>::max() - buffer.capacity())
+    const uintptr_t owner_start = reinterpret_cast<uintptr_t>(buffer.data());
+    if (owner_start > std::numeric_limits<uintptr_t>::max() - buffer.capacity())
     {
         return false;
     }
-    const std::uintptr_t owner_end = owner_start + buffer.capacity();
-    if (owner_start > std::numeric_limits<std::uintptr_t>::max() - offset)
+    const uintptr_t owner_end = owner_start + buffer.capacity();
+    if (owner_start > std::numeric_limits<uintptr_t>::max() - offset)
     {
         return false;
     }
-    const std::uintptr_t start = owner_start + offset;
-    if (start > std::numeric_limits<std::uintptr_t>::max() - len)
+    const uintptr_t start = owner_start + offset;
+    if (start > std::numeric_limits<uintptr_t>::max() - len)
     {
         return false;
     }
-    if (start + len > std::numeric_limits<std::uintptr_t>::max() - (dcache_line_size - 1U))
+    if (start + len > std::numeric_limits<uintptr_t>::max() - (dcache_line_size - 1U))
     {
         return false;
     }
@@ -103,8 +101,8 @@ bool invalidate_rx_region(bsp::dma::buffer_view buffer, size_t offset, size_t le
         return true;
     }
 
-    std::uintptr_t aligned_start = 0U;
-    std::uintptr_t aligned_end = 0U;
+    uintptr_t aligned_start = 0U;
+    uintptr_t aligned_end = 0U;
     if (!cache_range_in_owner(buffer, offset, len, aligned_start, aligned_end))
     {
         return false;
@@ -123,8 +121,8 @@ bool invalidate_rx_region(bsp::dma::buffer_view buffer, size_t offset, size_t le
 bool prepare_rx_dma_buffer(bsp::dma::buffer_view buffer)
 {
 #if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
-    std::uintptr_t aligned_start = 0U;
-    std::uintptr_t aligned_end = 0U;
+    uintptr_t aligned_start = 0U;
+    uintptr_t aligned_end = 0U;
     if (!cache_range_in_owner(buffer, 0U, buffer.capacity(), aligned_start, aligned_end))
     {
         return false;
@@ -145,8 +143,8 @@ bool clean_tx_dma_buffer(bsp::dma::buffer_view buffer, size_t len)
         return false;
     }
 
-    std::uintptr_t aligned_start = 0U;
-    std::uintptr_t aligned_end = 0U;
+    uintptr_t aligned_start = 0U;
+    uintptr_t aligned_end = 0U;
     if (!cache_range_in_owner(buffer, 0U, len, aligned_start, aligned_end))
     {
         return false;
@@ -209,7 +207,7 @@ namespace bsp::usart
 namespace
 {
 
-const port_config* config_of(std::size_t index) noexcept
+const port_config* config_of(uint8_t index) noexcept
 {
     return index < port_count ? &configs[index] : nullptr;
 }
@@ -227,7 +225,7 @@ void enable_dma_irq(DMA_HandleTypeDef* dma) noexcept
 
 } // namespace
 
-UART_HandleTypeDef* handle_of(std::size_t index) noexcept
+UART_HandleTypeDef* handle_of(uint8_t index) noexcept
 {
     const port_config* cfg = config_of(index);
     if (cfg == nullptr || !cfg->enabled)
@@ -238,9 +236,9 @@ UART_HandleTypeDef* handle_of(std::size_t index) noexcept
     return detail::binding_for(index, binding) ? binding.uart : nullptr;
 }
 
-std::size_t index_of(UART_HandleTypeDef* handle) noexcept
+uint8_t index_of(UART_HandleTypeDef* handle) noexcept
 {
-    for (std::size_t i = 0; i < port_count; ++i)
+    for (uint8_t i = 0; i < port_count; ++i)
     {
         if (handle_of(i) == handle)
         {
@@ -258,7 +256,7 @@ bool port_enabled(port port) noexcept
 
 void setup_dma(UART_HandleTypeDef* handle) noexcept
 {
-    const std::size_t index = index_of(handle);
+    const uint8_t index = index_of(handle);
     const port_config* cfg = config_of(index);
     if (cfg == nullptr || !cfg->enabled)
     {
@@ -279,6 +277,23 @@ void setup_dma(UART_HandleTypeDef* handle) noexcept
     {
         enable_dma_irq(binding.tx_dma);
     }
+}
+
+types::status stop_rx(port port)
+{
+    auto* ctx = state_of(port);
+    auto* handle = handle_of(port);
+    if (!ctx || !handle) return types::status::not_configured;
+    if (!ctx->rx_buffer.data()) return types::status::ok;
+    if (HAL_UART_AbortReceive(handle) != HAL_OK) return types::status::error;
+    TX_INTERRUPT_SAVE_AREA
+    TX_DISABLE
+    ctx->callback = {};
+    ctx->notify_sem = nullptr;
+    ctx->rx_buffer = {};
+    ctx->rx_position = 0;
+    TX_RESTORE
+    return types::status::ok;
 }
 
 types::status restart_rx(port port)

@@ -4,8 +4,8 @@
 #include "tx_api.h"
 
 #include <atomic>
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 
 namespace imu
 {
@@ -97,7 +97,7 @@ public:
     {
         vector3 accel{};              // m/s^2
         vector3 gyro{};               // rad/s
-        float temperature = 0.0f;     // degC; official CAN parser currently leaves this unset
+        float temperature = 0.0f;     // degC; integer Celsius from the acceleration frame
         float pitch_deg = 0.0f;
         float yaw_deg = 0.0f;
         float roll_deg = 0.0f;
@@ -139,11 +139,12 @@ public:
         command_reply last_reply{};
     };
 
-    bool initialize(const config& cfg);
+    types::status initialize(const config& cfg);
 
-    // Called by the owning service thread. The FDCAN ISR only copies matching
+    // Called by the owning reader thread. The FDCAN ISR only copies matching
     // frames into the internal queue and never performs floating-point decode.
     bool process_next(ULONG wait_option = TX_NO_WAIT);
+    // Process at most one queue capacity per call, including concurrent arrivals.
     uint32_t process_pending();
     bool take_snapshot(snapshot& out);
     bool audit_online();
@@ -182,7 +183,7 @@ private:
     static_assert(sizeof(queued_frame) % sizeof(ULONG) == 0U,
                   "DMIMU queue messages must contain a whole number of ULONG words");
 
-    static constexpr std::size_t rx_queue_depth = 16U;
+    static constexpr uint8_t rx_queue_depth = 16U;
     static constexpr UINT rx_queue_message_words =
         static_cast<UINT>(sizeof(queued_frame) / sizeof(ULONG));
 
@@ -209,7 +210,6 @@ private:
     void commit_if_complete();
     types::status send_command(register_id reg, access operation, uint32_t data);
 
-    static float uint_to_float(uint32_t value, float min, float max, uint8_t bits);
     static uint32_t read_u32_le(const uint8_t* data);
     static void write_u32_le(uint8_t* data, uint32_t value);
 

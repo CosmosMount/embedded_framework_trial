@@ -31,7 +31,7 @@ class ConfigurationTests(unittest.TestCase):
                 output = self.root / "build" / board
                 result = self.cmake("configure.cmake", board, f"-DOUT_DIR={output}")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                for name in ("config.hpp", "robot_config.hpp", "bsp_bindings.hpp", "bsp_bindings.cpp", "cubemx.script"):
+                for name in ("config.hpp", "robot_config.hpp", "module_bindings.hpp", "bsp_bindings.cpp", "cubemx.script"):
                     self.assertGreater((output / name).stat().st_size, 0)
                 result = self.cmake("export_editor_context.cmake", board, f"-DPNX_EDITOR_OUTPUT={output}/editor.json")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -42,6 +42,98 @@ class ConfigurationTests(unittest.TestCase):
                     self.assertTrue(path.is_relative_to(self.root / "configs"), file)
                     self.assertTrue(path.is_file(), file)
         self.assertFalse((self.root / "boards").exists())
+
+    def test_led_parameters(self):
+        board = "h723_dmmc02"
+        path = self.root / "configs/boards" / board / "params.json"
+        data = json.loads(path.read_text())
+        for key, value in (("brightness", -1), ("brightness", 256), ("brightness", 1.5),
+                           ("spi_timeout_ms", 0), ("blink_half_period_calls", 32768)):
+            with self.subTest(key=key, value=value):
+                data["led"] = {key: value}
+                path.write_text(json.dumps(data))
+                result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/led")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("params.led", result.stdout + result.stderr)
+        data["led"] = {"brightness": 0, "blink_half_period_calls": 32767}
+        path.write_text(json.dumps(data))
+        result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/led")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_unsupported_motor_mode_rejected(self):
+        board = "h723_dmmc02"
+        path = self.root / "configs/boards" / board / "robot.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["devices"]["motors"]["list"][0]["control_mode"] = "multi"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/unsupported")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("control_mode", result.stdout + result.stderr)
+
+    def test_motor_capacity_rejects_invalid_integer_range(self):
+        board = "h723_dmmc02"
+        path = self.root / "configs/boards" / board / "robot.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for capacity in (0, -1, 65536, 1.5):
+            with self.subTest(capacity=capacity):
+                data["devices"]["motors"].setdefault("dm", {})["max_motors"] = capacity
+                path.write_text(json.dumps(data), encoding="utf-8")
+                result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/invalid-capacity")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("max_motors", result.stdout + result.stderr)
+
+    def test_dual_remote_configuration(self):
+        for board in self.boards:
+            path = self.root / "configs/boards" / board / "params.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["remoter"] = {"source": "vt03_dr16"}
+            data["bindings"]["referee_uart"] = "none"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            output = self.root / "build" / board
+            result = self.cmake("configure.cmake", board, f"-DOUT_DIR={output}")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            header = (output / "config.hpp").read_text()
+            self.assertIn("#define ENABLE_DR16 1", header)
+            self.assertIn("#define ENABLE_VT03 1", header)
+            self.assertIn("#define ENABLE_PS2 0", header)
+            # Independent JSON bindings must drive the actual generated C++ aliases.
+            changed = json.loads(json.dumps(data))
+            bindings = changed["bindings"]
+            bindings["remoter_uart"], bindings["vt03_uart"] = bindings["vt03_uart"], bindings["remoter_uart"]
+            bindings["referee_uart"] = "uart7" if board == "h723_dmmc02" else "usart1"
+            path.write_text(json.dumps(changed), encoding="utf-8")
+            result = self.cmake("configure.cmake", board, f"-DOUT_DIR={output}")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            header = (output / "config.hpp").read_text()
+            for role, key in (("dr16", "remoter_uart"), ("vt03", "vt03_uart"), ("referee", "referee_uart")):
+                self.assertIn(f"inline constexpr bsp::usart::port {role} = {bindings[key]};", header)
+            for failure in ("same_uart", "missing_uart", "referee", "zero_timeout", "fractional_timeout"):
+                with self.subTest(board=board, failure=failure):
+                    invalid = json.loads(json.dumps(data))
+                    if failure == "same_uart":
+                        invalid["bindings"]["vt03_uart"] = invalid["bindings"]["remoter_uart"]
+                    elif failure == "missing_uart":
+                        invalid["bindings"]["vt03_uart"] = "none"
+                    elif failure == "referee":
+                        invalid["bindings"]["referee_uart"] = invalid["bindings"]["vt03_uart"]
+                    else:
+                        invalid["remoter"]["offline_timeout_ticks"] = 0 if failure == "zero_timeout" else 1.5
+                    path.write_text(json.dumps(invalid), encoding="utf-8")
+                    result = self.cmake("configure.cmake", board, f"-DOUT_DIR={output}")
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("bindings.vt03_uart" if failure == "missing_uart" else
+                                  "UART" if failure in ("same_uart", "referee") else "offline_timeout_ticks",
+                                  result.stdout + result.stderr)
+
+    def test_retired_serial_ps2_rejected(self):
+        board = "h723_dmmc02"
+        path = self.root / "configs/boards" / board / "params.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["remoter"] = {"source": "ps2_uart"}
+        path.write_text(json.dumps(data), encoding="utf-8")
+        result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/retired")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("params.remoter.source must be one of", result.stdout + result.stderr)
 
     def test_unknown_profile_rejected(self):
         for script, output in (("configure.cmake", "-DOUT_DIR=build/bad"),

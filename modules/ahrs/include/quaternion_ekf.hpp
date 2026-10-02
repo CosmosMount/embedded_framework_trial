@@ -5,7 +5,7 @@
 #include "arm_math.h"
 
 #include <cmath>
-#include <cstdint>
+#include <stdint.h>
 #include <cstring>
 
 namespace ahrs

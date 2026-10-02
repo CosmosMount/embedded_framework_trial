@@ -4,8 +4,8 @@
 #include "callback.hpp"
 #include "usertypes.hpp"
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 #include <type_traits>
 
 namespace bsp::usb
@@ -73,7 +73,7 @@ const runtime_state& state();
 // try_send is thread-context only and copies the bytes before returning.
 // ok means queued, not delivered. One pending write is allowed in addition to
 // the in-flight write; its completion is reported on the USB write thread.
-types::status try_send(const uint8_t* data, std::size_t len);
+types::status try_send(const uint8_t* data, size_t len);
 
 template <typename Packet>
 types::status try_send(const Packet& packet)

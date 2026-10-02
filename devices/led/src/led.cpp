@@ -1,123 +1,69 @@
 #include "led.hpp"
-
 #include "bsp_spi.hpp"
 #include "config.hpp"
 
 namespace led
 {
-
 namespace
 {
-
-
 constexpr bsp::spi::bus ws2812_bus = board::device::led::spi;
-constexpr uint8_t ws2812_low = 0xC0;
-constexpr uint8_t ws2812_high = 0xF0;
-constexpr uint32_t spi_timeout_ms = 1000;
+constexpr uint8_t low_symbol = 0x60;
+constexpr uint8_t high_symbol = 0x78;
+// Preserve the established reset interval as 100 low bytes, sent in one transfer.
+constexpr uint8_t reset_bytes[100]{};
+constexpr uint8_t brightness = params::led::brightness;
 
-bool set_rgb(uint8_t r, uint8_t g, uint8_t b)
+types::status set_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
-    uint8_t txbuf[24]{};
-    const uint8_t reset_byte = 0;
-
-    for (int i = 0; i < 8; ++i)
+    uint8_t payload[24]{};
+    for (uint8_t i = 0; i < 8; ++i)
     {
-        txbuf[7 - i] =
-            static_cast<uint8_t>((((g >> i) & 0x01U) ? ws2812_high : ws2812_low) >> 1);
-        txbuf[15 - i] =
-            static_cast<uint8_t>((((r >> i) & 0x01U) ? ws2812_high : ws2812_low) >> 1);
-        txbuf[23 - i] =
-            static_cast<uint8_t>((((b >> i) & 0x01U) ? ws2812_high : ws2812_low) >> 1);
+        payload[7 - i] = ((g >> i) & 1U) ? high_symbol : low_symbol;
+        payload[15 - i] = ((r >> i) & 1U) ? high_symbol : low_symbol;
+        payload[23 - i] = ((b >> i) & 1U) ? high_symbol : low_symbol;
     }
-
-    if (bsp::spi::wait_ready(ws2812_bus, spi_timeout_ms) != types::status::ok)
-    {
-        return false;
-    }
-    if (bsp::spi::transmit(ws2812_bus, txbuf, sizeof(txbuf), spi_timeout_ms) != types::status::ok)
-    {
-        return false;
-    }
-    for (int i = 0; i < 100; ++i)
-    {
-        if (bsp::spi::transmit(ws2812_bus, &reset_byte, 1, spi_timeout_ms) != types::status::ok)
-        {
-            return false;
-        }
-    }
-
-    return true;
+    auto status = bsp::spi::wait_ready(ws2812_bus, params::led::spi_timeout_ms);
+    if (status != types::status::ok) return status;
+    status = bsp::spi::transmit(ws2812_bus, payload, sizeof(payload), params::led::spi_timeout_ms);
+    if (status != types::status::ok) return status;
+    return bsp::spi::transmit(ws2812_bus, reset_bytes, sizeof(reset_bytes), params::led::spi_timeout_ms);
 }
-
-
 } // namespace
 
-void init()
+types::status init()
 {
-    all_on();
+    const auto status = bsp::spi::init(ws2812_bus);
+    return status == types::status::ok ? all_on() : status;
 }
 
-void all_on()
-{
-    (void)set_rgb(7, 7, 7);
-}
+types::status all_on() { return set_rgb(brightness, brightness, brightness); }
+types::status all_off() { return set_rgb(0, 0, 0); }
 
-void all_off()
-{
-    (void)set_rgb(0, 0, 0);
-}
-
-void on(color c)
+types::status on(color c)
 {
     switch (c)
     {
-    case color::red:
-        (void)set_rgb(7, 0, 0);
-        break;
-    case color::green:
-        (void)set_rgb(0, 7, 0);
-        break;
-    case color::blue:
-        (void)set_rgb(0, 0, 7);
-        break;
-    case color::white:
-        (void)set_rgb(7, 7, 7);
-        break;
+    case color::red: return set_rgb(brightness, 0, 0);
+    case color::green: return set_rgb(0, brightness, 0);
+    case color::blue: return set_rgb(0, 0, brightness);
+    case color::white: return all_on();
     }
+    return types::status::invalid_arg;
 }
 
-void toggle(color c)
+types::status toggle(color c)
 {
     static bool enabled = false;
-    enabled = !enabled;
-    if (enabled)
-    {
-        on(c);
-    }
-    else
-    {
-        all_off();
-    }
+    const auto status = enabled ? all_off() : on(c);
+    if (status == types::status::ok) enabled = !enabled;
+    return status;
 }
 
-void blink(color c)
+types::status blink(color c)
 {
-    static uint32_t flash_count = 0;
-    ++flash_count;
-
-    if (flash_count <= 250)
-    {
-        all_off();
-    }
-    else if (flash_count <= 500)
-    {
-        on(c);
-    }
-
-    if (flash_count >= 500)
-    {
-        flash_count = 0;
-    }
+    static uint16_t count = 0;
+    const auto status = count < params::led::blink_half_period_calls ? all_off() : on(c);
+    if (status == types::status::ok && ++count == 2U * params::led::blink_half_period_calls) count = 0;
+    return status;
 }
-
 } // namespace led

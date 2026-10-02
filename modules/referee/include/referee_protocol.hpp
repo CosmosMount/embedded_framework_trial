@@ -1,7 +1,7 @@
 # pragma once
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 #include <atomic>
 
 /* 通信协议内容: 常规链路由裁判系统服务器和主控模块进行数据转发，从电源管理模块的User串口收发数据 */
@@ -445,8 +445,8 @@ enum UnpackState
 namespace referee::protocol
 {
 
-inline constexpr std::size_t max_data_length = 200;
-inline constexpr std::size_t max_robot_interaction_payload =
+inline constexpr uint16_t max_data_length = 200;
+inline constexpr uint16_t max_robot_interaction_payload =
     max_data_length - sizeof(RoboInteractData_t);
 
 } // namespace referee::protocol

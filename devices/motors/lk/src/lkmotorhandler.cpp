@@ -9,29 +9,27 @@ lkmotorhandler& lkmotorhandler::instance()
     return handler;
 }
 
-bool lkmotorhandler::register_motor(motor& device) noexcept
+types::status lkmotorhandler::register_motor(motor& device) noexcept
 {
     if (device.get_protocol() != protocol::lk)
     {
-        return false;
+        return types::status::invalid_arg;
     }
     auto& lk = static_cast<lkmotor&>(device);
     if (!lk.protocol_valid() || lk.can_id() < 0x141 || lk.can_id() > 0x144)
     {
-        return false;
+        return types::status::invalid_arg;
     }
 
-    if (!ensure_bus(lk.can_bus()))
-    {
-        return false;
-    }
+    const auto bus_status = ensure_bus(lk.can_bus());
+    if (bus_status != types::status::ok) return bus_status;
 
-    const uint8_t bus = bus_index(lk.can_bus());
+    const uint8_t bus = static_cast<uint8_t>(lk.can_bus());
     const uint8_t slot = static_cast<uint8_t>(lk.can_id() - 0x141);
-    if (motor_list_[bus][slot] && motor_list_[bus][slot] != &lk) return false;
+    if (motor_list_[bus][slot] && motor_list_[bus][slot] != &lk) return types::status::busy;
     motor_list_[bus][slot] = &lk;
 
-    return true;
+    return types::status::ok;
 }
 
 types::status lkmotorhandler::stop() noexcept
@@ -101,7 +99,7 @@ void lkmotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& fr
         return;
     }
 
-    lkmotor* m = motor_list_[bus_index(bus)][static_cast<uint8_t>(slot)];
+    lkmotor* m = motor_list_[static_cast<uint8_t>(bus)][static_cast<uint8_t>(slot)];
     if (m != nullptr)
     {
         m->parse_feedback(frame.data, frame.len);

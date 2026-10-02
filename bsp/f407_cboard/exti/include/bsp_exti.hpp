@@ -4,7 +4,7 @@
 #include "config.hpp"
 #include "usertypes.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace bsp::exti
 {

@@ -3,7 +3,7 @@
 #include "motor.hpp"
 #include "xv2protocol.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace motors
 {

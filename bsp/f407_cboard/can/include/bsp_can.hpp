@@ -5,8 +5,8 @@
 #include "tx_api.h"
 #include "usertypes.hpp"
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 
 namespace bsp::can
 {
@@ -24,10 +24,11 @@ struct rx_frame
 // Invoked from the CAN HAL interrupt path; it must not block.
 using rx_callback = core::callback<void(bus, const rx_frame&)>;
 
-bool bus_enabled(std::size_t index) noexcept;
+bool bus_enabled(uint8_t index) noexcept;
 
 types::status init(bus bus);
 types::status restart(bus bus);
+types::status current_status(bus bus) noexcept;
 types::status transmit(bus bus, uint32_t id, const uint8_t* data, uint16_t len);
 
 // Register before starting reception. The borrowed callback target must remain

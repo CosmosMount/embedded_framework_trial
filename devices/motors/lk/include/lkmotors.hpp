@@ -3,7 +3,7 @@
 #include "motor.hpp"
 #include "constants.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace motors
 {

@@ -1,4 +1,5 @@
 #include "pid.hpp"
+#include "quantize.hpp"
 #include "callback.hpp"
 #include "referee.hpp"
 #include "djimotorhandler.hpp"
@@ -106,6 +107,18 @@ void test_referee_config()
 
 void test_motors()
 {
+    for (uint8_t bits : {12, 14, 16})
+    {
+        const uint32_t maximum = (UINT32_C(1) << bits) - 1U;
+        require(math::quantize(-10.0f, -10.0f, 10.0f, bits) == 0U, "quantize minimum");
+        require(math::quantize(10.0f, -10.0f, 10.0f, bits) == maximum, "quantize maximum");
+        near(math::dequantize(0, -10.0f, 10.0f, bits), -10.0f, "decode minimum");
+        near(math::dequantize(maximum, -10.0f, 10.0f, bits), 10.0f, "decode maximum");
+        const auto code = math::quantize(2.5f, -10.0f, 10.0f, bits);
+        const float decoded = math::dequantize(code, -10.0f, 10.0f, bits);
+        require(decoded <= 2.5f && 2.5f - decoded <= 20.0f / maximum, "round-trip quantization error");
+    }
+
     using namespace motors;
     const auto bus = static_cast<bsp::can::bus>(0);
     auto& dji = djimotorhandler::instance();
@@ -120,10 +133,13 @@ void test_motors()
     dji_config.can_id = 0x201;
     m3508 device(dji_config);
     m3508 duplicate(dji_config);
-    require(dji.register_motor(device), "DJI registration");
-    require(dji.register_motor(device), "same device registration is idempotent");
-    require(!dji.register_motor(duplicate), "duplicate address rejected");
-    require(device.set_current_raw(0x1234), "DJI current accepted");
+    require(device.set_torque(1.0f) == types::status::not_configured, "unknown torque calibration is explicit");
+    require(device.set_current_raw(20000) == types::status::invalid_arg, "out-of-range raw current rejected");
+    require(device.control_mode == mode::relax, "rejected command clears output");
+    require(dji.register_motor(device) == types::status::ok, "DJI registration");
+    require(dji.register_motor(device) == types::status::ok, "same device registration is idempotent");
+    require(dji.register_motor(duplicate) == types::status::busy, "duplicate address rejected");
+    require(device.set_current_raw(0x1234) == types::status::ok, "DJI current accepted");
     require(dji.send_control() == types::status::ok, "DJI submit");
     require(sent.size() == 1 && sent[0].id == 0x200 &&
             sent[0].data == std::vector<uint8_t>({0x12, 0x34, 0, 0, 0, 0, 0, 0}), "DJI wire bytes");
@@ -141,8 +157,8 @@ void test_motors()
     lk_config.can_id = 0x144;
     lk_config.protocol_options = &options;
     lk8016 last_slot(lk_config);
-    require(lk.register_motor(last_slot), "LK last-slot registration");
-    require(last_slot.set_current_raw(-2), "LK negative current accepted");
+    require(lk.register_motor(last_slot) == types::status::ok, "LK last-slot registration");
+    require(last_slot.set_current_raw(-2) == types::status::ok, "LK negative current accepted");
     require(lk.send_control() == types::status::ok, "LK submit");
     require(sent.size() == 1 && sent[0].id == 0x280 &&
             sent[0].data == std::vector<uint8_t>({0, 0, 0, 0, 0, 0, 0xfe, 0xff}), "LK little-endian slot bytes");

@@ -34,19 +34,19 @@ GPIO_TypeDef* port_from_id(port_id id) noexcept
 
 const input_config* config_of(input input_id) noexcept
 {
-    const auto index = static_cast<std::size_t>(input_id);
+    const auto index = static_cast<uint8_t>(input_id);
     return index < input_count ? &input_configs[index] : nullptr;
 }
 
 const output_config* config_of(output output_id) noexcept
 {
-    const auto index = static_cast<std::size_t>(output_id);
+    const auto index = static_cast<uint8_t>(output_id);
     return index < output_count ? &output_configs[index] : nullptr;
 }
 
-std::uint16_t pin_mask(std::uint8_t pin) noexcept
+uint16_t pin_mask(uint8_t pin) noexcept
 {
-    return static_cast<std::uint16_t>(1U << pin);
+    return static_cast<uint16_t>(1U << pin);
 }
 
 } // namespace
@@ -75,7 +75,7 @@ types::status is_active(input input_id, bool& active)
     {
         return status;
     }
-    const input_config& config = input_configs[static_cast<std::size_t>(input_id)];
+    const input_config& config = input_configs[static_cast<uint8_t>(input_id)];
     active = config.active == active_level::high ? is_high : !is_high;
     return types::status::ok;
 }

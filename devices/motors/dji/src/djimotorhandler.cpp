@@ -9,29 +9,27 @@ djimotorhandler& djimotorhandler::instance()
     return handler;
 }
 
-bool djimotorhandler::register_motor(motor& device) noexcept
+types::status djimotorhandler::register_motor(motor& device) noexcept
 {
     if (device.get_protocol() != protocol::dji)
     {
-        return false;
+        return types::status::invalid_arg;
     }
     auto& dji = static_cast<djimotor&>(device);
     if (!dji.valid_can_id())
     {
-        return false;
+        return types::status::invalid_arg;
     }
 
-    if (!ensure_bus(dji.can_bus()))
-    {
-        return false;
-    }
+    const auto bus_status = ensure_bus(dji.can_bus());
+    if (bus_status != types::status::ok) return bus_status;
 
-    const uint8_t bus = bus_index(dji.can_bus());
+    const uint8_t bus = static_cast<uint8_t>(dji.can_bus());
     const uint8_t slot = static_cast<uint8_t>(dji.can_id() - 0x201);
-    if (motor_list_[bus][slot] && motor_list_[bus][slot] != &dji) return false;
+    if (motor_list_[bus][slot] && motor_list_[bus][slot] != &dji) return types::status::busy;
     motor_list_[bus][slot] = &dji;
 
-    return true;
+    return types::status::ok;
 }
 
 types::status djimotorhandler::stop() noexcept
@@ -82,7 +80,7 @@ void djimotorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& f
         return;
     }
 
-    djimotor* m = motor_list_[bus_index(bus)][static_cast<uint8_t>(slot)];
+    djimotor* m = motor_list_[static_cast<uint8_t>(bus)][static_cast<uint8_t>(slot)];
     if (m != nullptr)
     {
         m->parse_feedback(frame.data, frame.len);

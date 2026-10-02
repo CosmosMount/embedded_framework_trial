@@ -9,24 +9,23 @@ xv2motorhandler& xv2motorhandler::instance()
     return handler;
 }
 
-bool xv2motorhandler::register_motor(motor& device) noexcept
+types::status xv2motorhandler::register_motor(motor& device) noexcept
 {
     if (device.get_protocol() != protocol::xv2)
     {
-        return false;
+        return types::status::invalid_arg;
     }
     auto& xv2 = static_cast<xv2motor&>(device);
 
-    if (!ensure_bus(xv2.can_bus()))
-    {
-        return false;
-    }
+    const auto bus_status = ensure_bus(xv2.can_bus());
+    if (bus_status != types::status::ok) return bus_status;
 
-    const uint8_t bus = bus_index(xv2.can_bus());
-    if (motor_list_[bus][xv2.address()] && motor_list_[bus][xv2.address()] != &xv2) return false;
+    const uint8_t bus = static_cast<uint8_t>(xv2.can_bus());
+    if (motor_list_[bus][xv2.address()] && motor_list_[bus][xv2.address()] != &xv2)
+        return types::status::busy;
     motor_list_[bus][xv2.address()] = &xv2;
 
-    return true;
+    return types::status::ok;
 }
 
 types::status xv2motorhandler::stop() noexcept
@@ -60,7 +59,7 @@ void xv2motorhandler::dispatch_rx(bsp::can::bus bus, const bsp::can::rx_frame& f
         return;
     }
 
-    xv2motor* m = motor_list_[bus_index(bus)][frame.data[0]];
+    xv2motor* m = motor_list_[static_cast<uint8_t>(bus)][frame.data[0]];
     if (m != nullptr)
     {
         m->parse_feedback(frame.data, frame.len);

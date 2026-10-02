@@ -1,8 +1,7 @@
 #include "bsp_can.hpp"
 #include "bsp_can_binding.hpp"
-#include "bsp_can_diag.hpp"
+#include "log.hpp"
 
-#include <array>
 #include <algorithm>
 #include <cstring>
 
@@ -12,7 +11,7 @@ namespace bsp::can
 namespace
 {
 
-const bus_config* config_of(std::size_t index) noexcept
+const bus_config* config_of(uint8_t index) noexcept
 {
     return index < bus_count ? &configs[index] : nullptr;
 }
@@ -21,7 +20,7 @@ const bus_config* config_of(std::size_t index) noexcept
 
 FDCAN_HandleTypeDef* handle_of(bus b) noexcept
 {
-    const bus_config* cfg = config_of(static_cast<std::size_t>(b));
+    const bus_config* cfg = config_of(static_cast<uint8_t>(b));
     if (cfg == nullptr || !cfg->enabled)
     {
         return nullptr;
@@ -32,17 +31,20 @@ FDCAN_HandleTypeDef* handle_of(bus b) noexcept
 
 bus bus_of(FDCAN_HandleTypeDef* handle) noexcept
 {
-    for (std::size_t i = 0; i < bus_count; ++i)
+    if (handle != nullptr)
     {
-        if (handle_of(static_cast<bus>(i)) == handle)
+        for (uint8_t i = 0; i < bus_count; ++i)
         {
-            return static_cast<bus>(i);
+            if (handle_of(static_cast<bus>(i)) == handle)
+            {
+                return static_cast<bus>(i);
+            }
         }
     }
-    return static_cast<bus>(0);
+    return static_cast<bus>(bus_count);
 }
 
-bool bus_enabled(std::size_t index) noexcept
+bool bus_enabled(uint8_t index) noexcept
 {
     const bus_config* cfg = config_of(index);
     return cfg != nullptr && cfg->enabled;
@@ -56,11 +58,16 @@ struct rx_slot
     rx_callback callback{};
 };
 
-std::array<bus_type, bus_count> active_types{};
-std::array<bool, bus_count> initialized{};
-std::array<std::array<rx_slot, max_rx_callbacks>, bus_count> rx_slots{};
-std::array<TX_SEMAPHORE, bus_count> err_sems{};
-std::array<bool, bus_count> err_sem_ready{};
+bus_type active_types[bus_count]{};
+struct bus_state
+{
+    bool initialized = false;
+    volatile types::status status = types::status::not_initialized;
+};
+bus_state states[bus_count]{};
+rx_slot rx_slots[bus_count][max_rx_callbacks]{};
+TX_SEMAPHORE err_sems[bus_count]{};
+bool err_sem_ready[bus_count]{};
 
 uint32_t len_to_dlc(uint16_t len) noexcept
 {
@@ -103,7 +110,7 @@ uint8_t dlc_to_len(uint32_t dlc) noexcept
 
 types::status ensure_err_sem(bus bus)
 {
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return types::status::invalid_arg;
@@ -122,7 +129,7 @@ types::status ensure_err_sem(bus bus)
 
 void notify_rx(bus bus, const rx_frame& frame)
 {
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return;
@@ -157,7 +164,7 @@ types::status configured_rx_fifo(FDCAN_HandleTypeDef* handle, uint32_t& fifo) no
 
 types::status configure_filter(bus bus, uint32_t fifo) noexcept
 {
-    const bus_config* cfg = config_of(static_cast<std::size_t>(bus));
+    const bus_config* cfg = config_of(static_cast<uint8_t>(bus));
     FDCAN_HandleTypeDef* handle = handle_of(bus);
     if (cfg == nullptr || handle == nullptr)
     {
@@ -187,7 +194,7 @@ types::status configure_filter(bus bus, uint32_t fifo) noexcept
 
 types::status init_classic(bus bus)
 {
-    const bus_config* cfg = config_of(static_cast<std::size_t>(bus));
+    const bus_config* cfg = config_of(static_cast<uint8_t>(bus));
     if (cfg == nullptr)
     {
         return types::status::not_configured;
@@ -212,10 +219,6 @@ types::status init_classic(bus bus)
                             FDCAN_IT_ARB_PROTOCOL_ERROR |
                             FDCAN_IT_DATA_PROTOCOL_ERROR |
                             FDCAN_IT_BUS_OFF;
-    if constexpr (config::feature::can_diag)
-    {
-        notification |= FDCAN_IT_RX_FIFO0_MESSAGE_LOST | FDCAN_IT_RX_FIFO1_MESSAGE_LOST;
-    }
 
     status = configure_filter(bus, fifo);
     if (status != types::status::ok)
@@ -235,7 +238,7 @@ types::status init_classic(bus bus)
 
 types::status init_fd(bus bus)
 {
-    const bus_config* cfg = config_of(static_cast<std::size_t>(bus));
+    const bus_config* cfg = config_of(static_cast<uint8_t>(bus));
     if (cfg == nullptr)
     {
         return types::status::not_configured;
@@ -260,10 +263,6 @@ types::status init_fd(bus bus)
                             FDCAN_IT_ARB_PROTOCOL_ERROR |
                             FDCAN_IT_DATA_PROTOCOL_ERROR |
                             FDCAN_IT_BUS_OFF;
-    if constexpr (config::feature::can_diag)
-    {
-        notification |= FDCAN_IT_RX_FIFO0_MESSAGE_LOST | FDCAN_IT_RX_FIFO1_MESSAGE_LOST;
-    }
 
     status = configure_filter(bus, fifo);
     if (status != types::status::ok)
@@ -294,7 +293,7 @@ types::status transmit_frame(bus bus,
     }
 
     FDCAN_TxHeaderTypeDef tx_header{};
-    const bus_config* cfg = config_of(static_cast<std::size_t>(bus));
+    const bus_config* cfg = config_of(static_cast<uint8_t>(bus));
     if (cfg == nullptr)
     {
         return types::status::not_configured;
@@ -314,16 +313,12 @@ types::status transmit_frame(bus bus,
     tx_header.MessageMarker = 0U;
 
     uint8_t payload[64]{};
-    const auto copy_len = std::min<std::size_t>(len, sizeof(payload));
+    const auto copy_len = std::min<size_t>(len, sizeof(payload));
     std::memcpy(payload, data, copy_len);
 
     if (HAL_FDCAN_AddMessageToTxFifoQ(handle, &tx_header, payload) != HAL_OK)
     {
         return types::status::error;
-    }
-    if constexpr (config::feature::can_diag)
-    {
-        ++can_diag_bus[static_cast<std::size_t>(bus)].tx_attempts_total;
     }
     return types::status::ok;
 }
@@ -333,59 +328,37 @@ types::status transmit_frame(bus bus,
 void handle_error(FDCAN_HandleTypeDef* handle, uint32_t error_status_its)
 {
     const auto bus = bus_of(handle);
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return;
     }
 
-    if constexpr (config::feature::can_diag)
-    {
-        if ((error_status_its & FDCAN_IT_ERROR_WARNING) != 0U)
-        {
-            ++can_diag_bus[idx].warning_total;
-            ++can_diag_bus[idx].err_events_total;
-        }
-        if ((error_status_its & FDCAN_IT_ERROR_PASSIVE) != 0U)
-        {
-            ++can_diag_bus[idx].passive_total;
-            ++can_diag_bus[idx].err_events_total;
-        }
-        if ((error_status_its & FDCAN_IT_BUS_OFF) != 0U)
-        {
-            ++can_diag_bus[idx].busoff_total;
-            ++can_diag_bus[idx].err_events_total;
-        }
-    }
-
-    if (active_types[idx] != bus_type::classic)
-    {
-        return;
-    }
-
-    if ((error_status_its & FDCAN_IT_ERROR_WARNING) != 0U ||
+    const bool error_event = (error_status_its & FDCAN_IT_ERROR_WARNING) != 0U ||
         (error_status_its & FDCAN_IT_ERROR_PASSIVE) != 0U ||
         (error_status_its & FDCAN_IT_ARB_PROTOCOL_ERROR) != 0U ||
-        (error_status_its & FDCAN_IT_DATA_PROTOCOL_ERROR) != 0U)
-    {
-        if (err_sem_ready[idx])
-        {
-            tx_semaphore_put(&err_sems[idx]);
-        }
-    }
+        (error_status_its & FDCAN_IT_DATA_PROTOCOL_ERROR) != 0U ||
+        (error_status_its & FDCAN_IT_BUS_OFF) != 0U;
 
     if ((error_status_its & FDCAN_IT_BUS_OFF) != 0U)
     {
-        HAL_FDCAN_Stop(handle);
-        HAL_FDCAN_Start(handle);
+        const auto status = restart(bus);
+        (void)logging::write(status == types::status::ok ? logging::level::warning
+                                                         : logging::level::error,
+                             "can recover", status, idx);
+    }
+    if (error_event && err_sem_ready[idx])
+    {
+        (void)tx_semaphore_put(&err_sems[idx]);
     }
 }
 
 void receive(FDCAN_HandleTypeDef* handle, uint32_t rx_fifo)
 {
     const auto bus = bus_of(handle);
-    const std::size_t idx = static_cast<std::size_t>(bus);
-    if (idx >= bus_count || !initialized[idx])
+    const uint8_t idx = static_cast<uint8_t>(bus);
+    if (idx >= bus_count || !states[idx].initialized ||
+        states[idx].status != types::status::ok)
     {
         return;
     }
@@ -404,16 +377,12 @@ void receive(FDCAN_HandleTypeDef* handle, uint32_t rx_fifo)
     frame.format = rx_header.FDFormat == FDCAN_FD_CAN ? bus_type::fd
                                                        : bus_type::classic;
     frame.bit_rate_switch = rx_header.BitRateSwitch == FDCAN_BRS_ON;
-    if constexpr (config::feature::can_diag)
-    {
-        ++can_diag_bus[idx].rx_frames_total;
-    }
     notify_rx(bus, frame);
-}// ?多态完了我怎么知道对应哪个can 哪个id有回调
+}
 
 types::status init(bus bus)
 {
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return types::status::invalid_arg;
@@ -431,20 +400,17 @@ types::status init(bus bus)
         return types::status::not_configured;
     }
 
-    if (initialized[idx])
+    if (states[idx].initialized)
     {
-        return types::status::ok;
+        return states[idx].status == types::status::ok ? types::status::ok
+                                                       : restart(bus);
     }
 
     types::status status = ensure_err_sem(bus);
     if (status != types::status::ok)
     {
+        states[idx].status = status;
         return status;
-    }
-
-    if constexpr (config::feature::can_diag)
-    {
-        bsp::can::diag::init(); // 惰性创建采样定时器（只创建一次）
     }
 
     if (cfg->type == bus_type::classic)
@@ -458,37 +424,53 @@ types::status init(bus bus)
 
     if (status != types::status::ok)
     {
+        states[idx].status = status;
         return status;
     }
 
     active_types[idx] = cfg->type;
-    initialized[idx] = true;
+    states[idx].initialized = true;
+    states[idx].status = types::status::ok;
     return types::status::ok;
 }
 
 types::status restart(bus bus)
 {
-    const std::size_t idx = static_cast<std::size_t>(bus);
-    if (idx >= bus_count || !bus_enabled(idx) || !initialized[idx])
+    const uint8_t idx = static_cast<uint8_t>(bus);
+    if (idx >= bus_count)
     {
-        return types::status::error;
+        return types::status::invalid_arg;
     }
+    if (!bus_enabled(idx)) return types::status::not_configured;
+    if (!states[idx].initialized) return states[idx].status;
 
     FDCAN_HandleTypeDef* handle = handle_of(bus);
     if (handle == nullptr)
     {
-        return types::status::error;
+        states[idx].status = types::status::not_configured;
+        return states[idx].status;
     }
 
     if (HAL_FDCAN_Stop(handle) != HAL_OK)
     {
-        return types::status::error;
+        states[idx].status = types::status::error;
+        return states[idx].status;
     }
     if (HAL_FDCAN_Start(handle) != HAL_OK)
     {
-        return types::status::error;
+        states[idx].status = types::status::error;
+        return states[idx].status;
     }
-    return types::status::ok;
+    states[idx].status = types::status::ok;
+    return states[idx].status;
+}
+
+types::status current_status(bus bus) noexcept
+{
+    const uint8_t idx = static_cast<uint8_t>(bus);
+    if (idx >= bus_count) return types::status::invalid_arg;
+    if (!bus_enabled(idx)) return types::status::not_configured;
+    return states[idx].status;
 }
 
 types::status transmit(bus bus, uint32_t id, const uint8_t* data, uint16_t len)
@@ -498,7 +480,7 @@ types::status transmit(bus bus, uint32_t id, const uint8_t* data, uint16_t len)
         return types::status::invalid_arg;
     }
 
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return types::status::invalid_arg;
@@ -509,10 +491,8 @@ types::status transmit(bus bus, uint32_t id, const uint8_t* data, uint16_t len)
         return types::status::not_configured;
     }
 
-    if (!initialized[idx])
-    {
-        return types::status::error;
-    }
+    if (!states[idx].initialized) return states[idx].status;
+    if (states[idx].status != types::status::ok) return states[idx].status;
 
     const bus_config* cfg = config_of(idx);
     const uint32_t max_id = cfg != nullptr && cfg->filter_id_type == id_type::extended
@@ -538,7 +518,7 @@ types::status register_rx_callback(bus bus, rx_callback callback)
         return types::status::invalid_arg;
     }
 
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return types::status::invalid_arg;
@@ -558,12 +538,12 @@ types::status register_rx_callback(bus bus, rx_callback callback)
         }
     }
 
-    return types::status::error;
+    return types::status::busy;
 }
 
 void unregister_rx_callbacks(bus bus)
 {
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return;
@@ -582,7 +562,7 @@ void unregister_rx_callbacks(bus bus)
 
 TX_SEMAPHORE* err_sem(bus bus)
 {
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count || !err_sem_ready[idx])
     {
         return nullptr;
@@ -595,26 +575,12 @@ TX_SEMAPHORE* err_sem(bus bus)
 
 extern "C" void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef* hfdcan, uint32_t RxFifo0ITs)
 {
-    if constexpr (config::feature::can_diag)
-    {
-        if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_MESSAGE_LOST) != 0U)
-        {
-            ++can_diag_bus[static_cast<std::size_t>(bsp::can::bus_of(hfdcan))].rx_overrun_total;
-        }
-    }
     (void)RxFifo0ITs;
     bsp::can::receive(hfdcan, FDCAN_RX_FIFO0);
 }
 
 extern "C" void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef* hfdcan, uint32_t RxFifo1ITs)
 {
-    if constexpr (config::feature::can_diag)
-    {
-        if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_MESSAGE_LOST) != 0U)
-        {
-            ++can_diag_bus[static_cast<std::size_t>(bsp::can::bus_of(hfdcan))].rx_overrun_total;
-        }
-    }
     (void)RxFifo1ITs;
     bsp::can::receive(hfdcan, FDCAN_RX_FIFO1);
 }

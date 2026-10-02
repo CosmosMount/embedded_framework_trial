@@ -1,9 +1,10 @@
 #pragma once
 // Test boundary for the STM32 HAL bxCAN calls; real headers are checked by ARM builds.
 #include <cstdint>
-struct CAN_HandleTypeDef { void* Instance; };
+struct CAN_HandleTypeDef { void* Instance; uint32_t ErrorCode{}; };
 #define CAN1 reinterpret_cast<void*>(1)
 #define CAN2 reinterpret_cast<void*>(2)
+#define HAL_CAN_ERROR_BOF 0x00000004U
 struct CAN_FilterTypeDef
 {
     uint32_t FilterBank{}, SlaveStartFilterBank{}, FilterMode{}, FilterScale{};

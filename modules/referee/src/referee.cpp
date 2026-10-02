@@ -1,8 +1,8 @@
 #include "referee.hpp"
 
-#include "bsp_dma.hpp"
 #include "crc.hpp"
-#include "memory.h"
+
+#include "bsp_dma.hpp"
 
 #include <cstring>
 
@@ -11,9 +11,7 @@ namespace referee
 
 namespace
 {
-
-constexpr std::size_t rx_buffer_size = 256;
-bsp::dma::buffer<rx_buffer_size> rx_buffer_storage BSP_DMA_BUFFER{};
+bsp::dma::buffer<256> rx_buffer_storage BSP_DMA_BUFFER{};
 
 enum class decode_result : uint8_t
 {
@@ -91,13 +89,13 @@ decode_result decode_packet(packet_store& packets, uint16_t command_id, const ui
 
 } // namespace
 
-service& service::instance()
+receiver& receiver::instance()
 {
-    static service inst;
+    static receiver inst;
     return inst;
 }
 
-void service::referee_rx_callback(bsp::usart::port, const bsp::usart::rx_frame& frame)
+void receiver::on_rx(bsp::usart::port, const bsp::usart::rx_frame& frame)
 {
     if (frame.data != nullptr && frame.len > 0)
     {
@@ -105,59 +103,57 @@ void service::referee_rx_callback(bsp::usart::port, const bsp::usart::rx_frame& 
     }
 }
 
-bool service::create_resources()
+types::status receiver::create_resources()
 {
     if (tx_semaphore_create(&heartbeat_sem_, const_cast<CHAR*>("referee_hb"), 0) != TX_SUCCESS)
-    {
-        return false;
-    }
-
-    std::memset(rx_buffer_storage.data(), 0, rx_buffer_storage.capacity());
-
-    if (bsp::usart::init(cfg_.uart_port, bsp::usart::mode::dma) != types::status::ok)
-    {
-        return false;
-    }
-    if (bsp::usart::start_rx_to_idle(cfg_.uart_port, rx_buffer_storage.view(),
-                                     bsp::usart::rx_callback::bind<&referee_rx_callback>(),
-                                     nullptr) != types::status::ok)
-    {
-        return false;
-    }
-
-    if (tx_thread_create(&thread_, const_cast<CHAR*>("referee"), referee_thread_entry,
+        return types::status::error;
+    if (tx_thread_create(&thread_, const_cast<CHAR*>("referee"), thread_entry,
                          reinterpret_cast<ULONG>(this), stack_, sizeof(stack_),
                          cfg_.thread_priority, cfg_.thread_priority, TX_NO_TIME_SLICE,
-                         TX_AUTO_START) != TX_SUCCESS)
+                         TX_DONT_START) != TX_SUCCESS)
     {
-        return false;
-    }
-
-    return true;
-}
-
-types::status service::init(const config& cfg)
-{
-    if (initialized_)
-    {
-        return types::status::ok;
-    }
-    cfg_ = cfg;
-    if (!create_resources())
-    {
+        (void)tx_semaphore_delete(&heartbeat_sem_);
         return types::status::error;
     }
-    initialized_ = true;
-    return types::status::ok;
+    auto result = bsp::usart::init(cfg_.uart_port, bsp::usart::mode::dma);
+    if (result == types::status::ok)
+        result = bsp::usart::start_rx_to_idle(cfg_.uart_port, rx_buffer_storage.view(), bsp::usart::rx_callback::bind<&on_rx>());
+    const bool reception_started = result == types::status::ok;
+    if (result == types::status::ok && tx_thread_resume(&thread_) == TX_SUCCESS)
+        return types::status::ok;
+    if (result == types::status::ok) result = types::status::error;
+    if (reception_started)
+    {
+        const auto stopped = bsp::usart::stop_rx(cfg_.uart_port);
+        if (stopped != types::status::ok) return stopped;
+    }
+    (void)tx_thread_delete(&thread_);
+    (void)tx_semaphore_delete(&heartbeat_sem_);
+    return result;
 }
 
-void service::referee_thread_entry(ULONG arg)
+snapshot receiver::read_snapshot() const noexcept
 {
-    auto* self = reinterpret_cast<service*>(arg);
-    if (self == nullptr)
-    {
-        self = &instance();
-    }
+    TX_INTERRUPT_SAVE_AREA
+    TX_DISABLE
+    const auto copy = published_;
+    TX_RESTORE
+    return copy;
+}
+
+types::status receiver::init(const config& cfg)
+{
+    if (initialization_status_ != types::status::not_initialized)
+        return initialization_status_;
+    cfg_ = cfg;
+    initialization_status_ = types::status::busy;
+    initialization_status_ = create_resources();
+    return initialization_status_;
+}
+
+void receiver::thread_entry(ULONG arg)
+{
+    auto* self = reinterpret_cast<receiver*>(arg);
 
     uint8_t rx_byte = 0;
     UnpackState state = STEP_HEADER_SOF;
@@ -167,7 +163,9 @@ void service::referee_thread_entry(ULONG arg)
 
     for (;;)
     {
-        while (self->rx_fifo_.pop(rx_byte))
+        // Bound each batch even if the ISR keeps adding bytes while we parse.
+        for (uint16_t processed = 0; processed < RefereeRingBuffer::capacity &&
+             self->rx_fifo_.pop(rx_byte); ++processed)
         {
             switch (state)
             {
@@ -186,7 +184,7 @@ void service::referee_thread_entry(ULONG arg)
                 {
                     if (crc::verify_crc8_checksum(buffer, sizeof(FrameHeader)) == 0)
                     {
-                        ++self->status_.crc8_error_count;
+                        ++self->working_.communication.crc8_error_count;
                         state = STEP_HEADER_SOF;
                         break;
                     }
@@ -194,7 +192,7 @@ void service::referee_thread_entry(ULONG arg)
                     data_length = static_cast<uint16_t>(buffer[1] | (buffer[2] << 8));
                     if (data_length > protocol::max_data_length)
                     {
-                        ++self->status_.length_error_count;
+                        ++self->working_.communication.length_error_count;
                         state = STEP_HEADER_SOF;
                         break;
                     }
@@ -209,7 +207,7 @@ void service::referee_thread_entry(ULONG arg)
                 {
                     if (crc::verify_crc16_checksum(buffer, index) == 0)
                     {
-                        ++self->status_.crc16_error_count;
+                        ++self->working_.communication.crc16_error_count;
                         state = STEP_HEADER_SOF;
                         break;
                     }
@@ -219,25 +217,26 @@ void service::referee_thread_entry(ULONG arg)
                     const uint8_t* payload =
                         &buffer[sizeof(FrameHeader) + sizeof(command_id)];
                     const decode_result result =
-                        decode_packet(self->packets_, command_id, payload, data_length);
+                        decode_packet(self->working_.packets, command_id, payload, data_length);
                     if (result == decode_result::invalid_length)
                     {
-                        ++self->status_.length_error_count;
+                        ++self->working_.communication.length_error_count;
                         state = STEP_HEADER_SOF;
                         break;
                     }
 
-                    self->status_.online = true;
-                    ++self->status_.valid_frame_count;
+                    self->working_.received_tick = static_cast<uint32_t>(tx_time_get());
+                    self->working_.communication.online = true;
+                    ++self->working_.communication.valid_frame_count;
                     if (result == decode_result::unknown)
                     {
-                        ++self->status_.unknown_packet_count;
+                        ++self->working_.communication.unknown_packet_count;
                     }
                     const update_info update{command_id, true, result == decode_result::known};
-                    if (self->cfg_.on_update_callback)
+                    if (self->cfg_.on_update)
                     {
                         // Runs synchronously in the referee receive thread and must not block.
-                        self->cfg_.on_update_callback(self->packets_, update);
+                        self->cfg_.on_update(self->working_.packets, update);
                     }
                     state = STEP_HEADER_SOF;
                 }
@@ -249,7 +248,14 @@ void service::referee_thread_entry(ULONG arg)
             }
         }
 
-        self->status_.rx_dropped_bytes = self->rx_fifo_.dropped_bytes();
+        self->working_.communication.rx_dropped_bytes = self->rx_fifo_.dropped_bytes();
+        self->working_.sequence = self->working_.communication.valid_frame_count;
+        {
+            TX_INTERRUPT_SAVE_AREA
+            TX_DISABLE
+            self->published_ = self->working_;
+            TX_RESTORE
+        }
         tx_semaphore_put(&self->heartbeat_sem_);
         tx_thread_sleep(1);
     }

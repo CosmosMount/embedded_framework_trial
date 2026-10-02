@@ -2,7 +2,7 @@
 
 #include "tactical_fusion.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 #include <cstring>
 
 namespace ahrs::tactical
@@ -23,14 +23,14 @@ struct diagnostics
     float gyro_magnitude_variance = 0.0f;
     float impact_acc_delta_g = 0.0f;
     float impact_gyro_delta_rad_s = 0.0f;
-    std::uint8_t motion_state = 0;
-    std::uint8_t impact_state = 0;
+    uint8_t motion_state = 0;
+    uint8_t impact_state = 0;
     bool paddling = false;
     bool linear_motion = false;
     float earth_acceleration[3] = {};
     float heave_velocity = 0.0f;
     float heave_position = 0.0f;
-    std::uint32_t update_count = 0;
+    uint32_t update_count = 0;
 };
 
 class ekf
@@ -86,8 +86,8 @@ private:
         diagnostics_.gyro_magnitude_variance = system_.noise.gyroMagVar * 0.0003046174198f;
         diagnostics_.impact_acc_delta_g = system_.impactAccDelta;
         diagnostics_.impact_gyro_delta_rad_s = FusionDegreesToRadians(system_.impactGyroDelta);
-        diagnostics_.motion_state = static_cast<std::uint8_t>(system_.motionState);
-        diagnostics_.impact_state = static_cast<std::uint8_t>(system_.impactState);
+        diagnostics_.motion_state = static_cast<uint8_t>(system_.motionState);
+        diagnostics_.impact_state = static_cast<uint8_t>(system_.impactState);
         diagnostics_.paddling = system_.isPaddling;
         diagnostics_.linear_motion = system_.isLinearMotion;
         const FusionVector earth = Tactical_GetEarthAcceleration(&system_, accel_);

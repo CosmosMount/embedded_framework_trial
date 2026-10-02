@@ -1,7 +1,7 @@
 #include "bsp_usb.hpp"
 
 #include "bridge_usb.h"
-#include "memory.h"
+#include "bsp_dma.hpp"
 #include "main.h"
 
 #include "ux_api.h"
@@ -274,7 +274,7 @@ const runtime_state& state()
     return usb_state;
 }
 
-types::status try_send(const uint8_t* data, std::size_t len)
+types::status try_send(const uint8_t* data, size_t len)
 {
     if (!initialized)
     {
@@ -282,15 +282,15 @@ types::status try_send(const uint8_t* data, std::size_t len)
     }
     if (__get_IPSR() != 0U || tx_thread_identify() == TX_NULL)
     {
-        return types::status::invalid_context;
+        return types::status::invalid_arg;
     }
     if (len == 0U)
     {
-        return types::status::empty;
+        return types::status::invalid_arg;
     }
     if (len > k_io_buffer_size)
     {
-        return types::status::too_large;
+        return types::status::invalid_arg;
     }
     if (data == nullptr)
     {
@@ -300,7 +300,7 @@ types::status try_send(const uint8_t* data, std::size_t len)
     refresh_connection();
     if (!usb_state.connected)
     {
-        return types::status::not_connected;
+        return types::status::error;
     }
     if (tx_mutex_get(&tx_lock, TX_NO_WAIT) != TX_SUCCESS)
     {

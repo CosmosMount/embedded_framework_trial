@@ -1,7 +1,7 @@
 #include "bsp_can.hpp"
 #include "bsp_can_binding.hpp"
+#include "log.hpp"
 
-#include <array>
 
 // bxCAN filter-bank partition and HAL operations adapted from c147b1d.
 // Bindings, callbacks and errors follow the current PnX interface.
@@ -9,11 +9,16 @@ namespace bsp::can
 {
 namespace
 {
-std::array<bool, bus_count> initialized{};
+struct bus_state
+{
+    bool initialized = false;
+    volatile types::status status = types::status::not_initialized;
+};
+bus_state states[bus_count]{};
 struct rx_slot { rx_callback callback{}; };
-std::array<std::array<rx_slot, max_rx_callbacks>, bus_count> rx_slots{};
-std::array<TX_SEMAPHORE, bus_count> err_sems{};
-std::array<bool, bus_count> err_sem_ready{};
+rx_slot rx_slots[bus_count][max_rx_callbacks]{};
+TX_SEMAPHORE err_sems[bus_count]{};
+bool err_sem_ready[bus_count]{};
 
 constexpr uint32_t notifications =
     CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO0_OVERRUN |
@@ -22,12 +27,12 @@ constexpr uint32_t notifications =
 
 const bus_config* config_of(bus selected) noexcept
 {
-    const auto index = static_cast<std::size_t>(selected);
+    const auto index = static_cast<uint8_t>(selected);
     return index < bus_count ? &configs[index] : nullptr;
 }
 } // namespace
 
-bool bus_enabled(std::size_t index) noexcept
+bool bus_enabled(uint8_t index) noexcept
 {
     return index < bus_count && configs[index].enabled;
 }
@@ -35,7 +40,7 @@ bool bus_enabled(std::size_t index) noexcept
 CAN_HandleTypeDef* handle_of(bus selected) noexcept
 {
     detail::binding binding{};
-    return bus_enabled(static_cast<std::size_t>(selected)) &&
+    return bus_enabled(static_cast<uint8_t>(selected)) &&
                    detail::binding_for(selected, binding) ? binding.can : nullptr;
 }
 
@@ -43,7 +48,7 @@ bus bus_of(CAN_HandleTypeDef* handle) noexcept
 {
     if (handle != nullptr)
     {
-        for (std::size_t index = 0; index < bus_count; ++index)
+        for (uint8_t index = 0; index < bus_count; ++index)
         {
             if (handle_of(static_cast<bus>(index)) == handle)
             {
@@ -56,14 +61,16 @@ bus bus_of(CAN_HandleTypeDef* handle) noexcept
 
 types::status init(bus selected)
 {
-    const auto index = static_cast<std::size_t>(selected);
+    const auto index = static_cast<uint8_t>(selected);
     const auto* cfg = config_of(selected);
     if (cfg == nullptr) return types::status::invalid_arg;
     if (!cfg->enabled || cfg->type != bus_type::classic)
     {
         return types::status::not_configured;
     }
-    if (initialized[index]) return types::status::ok;
+    if (states[index].initialized)
+        return states[index].status == types::status::ok ? types::status::ok
+                                                         : restart(selected);
     auto* handle = handle_of(selected);
     if (handle == nullptr) return types::status::not_configured;
 
@@ -71,6 +78,7 @@ types::status init(bus selected)
     {
         if (tx_semaphore_create(&err_sems[index], const_cast<CHAR*>("can_err"), 0) != TX_SUCCESS)
         {
+            states[index].status = types::status::error;
             return types::status::error;
         }
         err_sem_ready[index] = true;
@@ -87,45 +95,62 @@ types::status init(bus selected)
     filter.FilterActivation = ENABLE;
     if (HAL_CAN_ConfigFilter(handle, &filter) != HAL_OK || HAL_CAN_Start(handle) != HAL_OK)
     {
-        return types::status::error;
+        states[index].status = types::status::error;
+        return states[index].status;
     }
     // Publish readiness before enabling RX interrupts.
-    initialized[index] = true;
+    states[index].initialized = true;
+    states[index].status = types::status::ok;
     if (HAL_CAN_ActivateNotification(handle, notifications) != HAL_OK)
     {
-        initialized[index] = false;
+        states[index].initialized = false;
+        states[index].status = types::status::error;
         static_cast<void>(HAL_CAN_Stop(handle));
-        return types::status::error;
+        return states[index].status;
     }
     return types::status::ok;
 }
 
 types::status restart(bus selected)
 {
-    const auto index = static_cast<std::size_t>(selected);
+    const auto index = static_cast<uint8_t>(selected);
     auto* handle = handle_of(selected);
-    if (index >= bus_count || !initialized[index] || handle == nullptr)
+    if (index >= bus_count)
     {
-        return types::status::error;
+        return types::status::invalid_arg;
     }
+    if (!bus_enabled(index)) return types::status::not_configured;
+    if (!states[index].initialized) return states[index].status;
+    if (handle == nullptr) return types::status::not_configured;
     if (HAL_CAN_Stop(handle) != HAL_OK || HAL_CAN_Start(handle) != HAL_OK ||
         HAL_CAN_ActivateNotification(handle, notifications) != HAL_OK)
     {
-        return types::status::error;
+        states[index].status = types::status::error;
+        return states[index].status;
     }
-    return types::status::ok;
+    states[index].status = types::status::ok;
+    return states[index].status;
+}
+
+types::status current_status(bus selected) noexcept
+{
+    const uint8_t index = static_cast<uint8_t>(selected);
+    if (index >= bus_count) return types::status::invalid_arg;
+    if (!bus_enabled(index)) return types::status::not_configured;
+    return states[index].status;
 }
 
 types::status transmit(bus selected, uint32_t id, const uint8_t* data, uint16_t len)
 {
-    const auto index = static_cast<std::size_t>(selected);
+    const auto index = static_cast<uint8_t>(selected);
     const auto* cfg = config_of(selected);
     if (cfg == nullptr || data == nullptr || len == 0U || len > 8U)
     {
         return types::status::invalid_arg;
     }
     if (!cfg->enabled) return types::status::not_configured;
-    if (!initialized[index]) return types::status::error;
+    if (!states[index].initialized) return states[index].status;
+    if (states[index].status != types::status::ok) return states[index].status;
     const bool extended = cfg->filter_id_type == id_type::extended;
     if (id > (extended ? 0x1FFFFFFFU : 0x7FFU)) return types::status::invalid_arg;
     auto* handle = handle_of(selected);
@@ -147,8 +172,9 @@ types::status transmit(bus selected, uint32_t id, const uint8_t* data, uint16_t 
 void receive(CAN_HandleTypeDef* handle, uint32_t fifo)
 {
     const auto selected = bus_of(handle);
-    const auto index = static_cast<std::size_t>(selected);
-    if (index >= bus_count || !initialized[index]) return;
+    const auto index = static_cast<uint8_t>(selected);
+    if (index >= bus_count || !states[index].initialized ||
+        states[index].status != types::status::ok) return;
     // Bound each IRQ dispatch to the three hardware FIFO slots.
     for (unsigned count = 0; count < 3U && HAL_CAN_GetRxFifoFillLevel(handle, fifo) != 0U; ++count)
     {
@@ -173,10 +199,17 @@ void receive(CAN_HandleTypeDef* handle, uint32_t fifo)
 
 void handle_error(CAN_HandleTypeDef* handle)
 {
-    const auto index = static_cast<std::size_t>(bus_of(handle));
-    if (index < bus_count && err_sem_ready[index])
+    const auto index = static_cast<uint8_t>(bus_of(handle));
+    if (index >= bus_count) return;
+    if ((handle->ErrorCode & HAL_CAN_ERROR_BOF) != 0U)
     {
-        // Recovery is explicit via restart(), outside the interrupt handler.
+        const auto status = restart(static_cast<bus>(index));
+        (void)logging::write(status == types::status::ok ? logging::level::warning
+                                                         : logging::level::error,
+                             "can recover", status, index);
+    }
+    if (err_sem_ready[index])
+    {
         static_cast<void>(tx_semaphore_put(&err_sems[index]));
     }
 }
@@ -188,7 +221,7 @@ types::status register_rx_callback(bus bus, rx_callback callback)
         return types::status::invalid_arg;
     }
 
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return types::status::invalid_arg;
@@ -208,12 +241,12 @@ types::status register_rx_callback(bus bus, rx_callback callback)
         }
     }
 
-    return types::status::error;
+    return types::status::busy;
 }
 
 void unregister_rx_callbacks(bus bus)
 {
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count)
     {
         return;
@@ -232,7 +265,7 @@ void unregister_rx_callbacks(bus bus)
 
 TX_SEMAPHORE* err_sem(bus bus)
 {
-    const std::size_t idx = static_cast<std::size_t>(bus);
+    const uint8_t idx = static_cast<uint8_t>(bus);
     if (idx >= bus_count || !err_sem_ready[idx])
     {
         return nullptr;

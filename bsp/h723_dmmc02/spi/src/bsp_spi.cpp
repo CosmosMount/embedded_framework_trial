@@ -1,7 +1,6 @@
 #include "bsp_spi.hpp"
 #include "bsp_spi_binding.hpp"
 
-#include <array>
 #include <limits>
 
 namespace bsp::spi
@@ -16,23 +15,23 @@ struct transfer_context
     bsp::dma::buffer_view dma_buffer{};
 };
 
-std::array<transfer_context, bus_count> transfers{};
+transfer_context transfers[bus_count]{};
 
-const bus_config* config_of(std::size_t index) noexcept
+const bus_config* config_of(uint8_t index) noexcept
 {
     return index < bus_count ? &configs[index] : nullptr;
 }
 
-std::size_t index_of(SPI_HandleTypeDef* handle) noexcept
+uint8_t index_of(SPI_HandleTypeDef* handle) noexcept
 {
-    for (std::size_t index = 0U; index < transfers.size(); ++index)
+    for (uint8_t index = 0U; index < bus_count; ++index)
     {
         if (handle_of(static_cast<bus>(index)) == handle)
         {
             return index;
         }
     }
-    return transfers.size();
+    return bus_count;
 }
 
 bool supports_it(bus bus_id) noexcept
@@ -51,21 +50,21 @@ bool supports_dma(bus bus_id, bool receive) noexcept
     return receive ? binding.has_rx_dma : binding.has_tx_dma;
 }
 
-bool cache_range(bsp::dma::buffer_view buffer, std::uintptr_t& aligned_start,
-                 std::uintptr_t& aligned_end) noexcept
+bool cache_range(bsp::dma::buffer_view buffer, uintptr_t& aligned_start,
+                 uintptr_t& aligned_end) noexcept
 {
     if (!bsp::dma::valid(buffer) || buffer.logical_size() > buffer.capacity())
     {
         return false;
     }
 
-    const std::uintptr_t start = reinterpret_cast<std::uintptr_t>(buffer.data());
-    if (start > std::numeric_limits<std::uintptr_t>::max() - buffer.logical_size())
+    const uintptr_t start = reinterpret_cast<uintptr_t>(buffer.data());
+    if (start > std::numeric_limits<uintptr_t>::max() - buffer.logical_size())
     {
         return false;
     }
-    const std::uintptr_t end = start + buffer.logical_size();
-    if (end > std::numeric_limits<std::uintptr_t>::max() - (bsp::dma::cache_line_size - 1U))
+    const uintptr_t end = start + buffer.logical_size();
+    if (end > std::numeric_limits<uintptr_t>::max() - (bsp::dma::cache_line_size - 1U))
     {
         return false;
     }
@@ -78,8 +77,8 @@ bool cache_range(bsp::dma::buffer_view buffer, std::uintptr_t& aligned_start,
 bool clean_tx_buffer(bsp::dma::buffer_view buffer) noexcept
 {
 #if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
-    std::uintptr_t aligned_start = 0U;
-    std::uintptr_t aligned_end = 0U;
+    uintptr_t aligned_start = 0U;
+    uintptr_t aligned_end = 0U;
     if (!cache_range(buffer, aligned_start, aligned_end))
     {
         return false;
@@ -110,8 +109,8 @@ bool prepare_rx_buffer(bsp::dma::buffer_view buffer) noexcept
 bool invalidate_rx_buffer(bsp::dma::buffer_view buffer) noexcept
 {
 #if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
-    std::uintptr_t aligned_start = 0U;
-    std::uintptr_t aligned_end = 0U;
+    uintptr_t aligned_start = 0U;
+    uintptr_t aligned_end = 0U;
     if (!cache_range(buffer, aligned_start, aligned_end))
     {
         return false;
@@ -128,8 +127,8 @@ types::status begin_transfer(bus bus_id, bool receive, bool dma, SPI_HandleTypeD
                              transfer_context*& context) noexcept
 {
     handle = handle_of(bus_id);
-    const std::size_t index = static_cast<std::size_t>(bus_id);
-    if (handle == nullptr || index >= transfers.size())
+    const uint8_t index = static_cast<uint8_t>(bus_id);
+    if (handle == nullptr || index >= bus_count)
     {
         return types::status::not_configured;
     }
@@ -154,8 +153,8 @@ types::status begin_transfer(bus bus_id, bool receive, bool dma, SPI_HandleTypeD
 
 void complete_transfer(SPI_HandleTypeDef* handle, bool success) noexcept
 {
-    const std::size_t index = index_of(handle);
-    if (index >= transfers.size())
+    const uint8_t index = index_of(handle);
+    if (index >= bus_count)
     {
         return;
     }
@@ -175,7 +174,7 @@ void complete_transfer(SPI_HandleTypeDef* handle, bool success) noexcept
 
 bool bus_enabled(bus bus) noexcept
 {
-    const bus_config* cfg = config_of(static_cast<std::size_t>(bus));
+    const bus_config* cfg = config_of(static_cast<uint8_t>(bus));
     return cfg != nullptr && cfg->enabled;
 }
 
@@ -227,7 +226,8 @@ types::status transmit(bus bus, const uint8_t* data, size_t len, uint32_t timeou
     }
 
     SPI_HandleTypeDef* handle = handle_of(bus);
-    if (handle == nullptr || data == nullptr || len == 0)
+    if (handle == nullptr || data == nullptr || len == 0U ||
+        len > UINT16_MAX)
     {
         return types::status::invalid_arg;
     }
@@ -249,7 +249,8 @@ types::status receive(bus bus, uint8_t* data, size_t len, uint32_t timeout_ms)
     }
 
     SPI_HandleTypeDef* handle = handle_of(bus);
-    if (handle == nullptr || data == nullptr || len == 0)
+    if (handle == nullptr || data == nullptr || len == 0U ||
+        len > UINT16_MAX)
     {
         return types::status::invalid_arg;
     }
@@ -378,8 +379,8 @@ types::status receive_dma(bus bus_id, bsp::dma::buffer_view buffer)
 const transfer_state& state(bus bus_id) noexcept
 {
     static const transfer_state unavailable{false, false, false, false, types::status::not_configured};
-    const std::size_t index = static_cast<std::size_t>(bus_id);
-    return index < transfers.size() ? transfers[index].state : unavailable;
+    const uint8_t index = static_cast<uint8_t>(bus_id);
+    return index < bus_count ? transfers[index].state : unavailable;
 }
 
 } // namespace bsp::spi

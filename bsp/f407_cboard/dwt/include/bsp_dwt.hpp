@@ -2,16 +2,16 @@
 
 #include "usertypes.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace bsp::dwt
 {
 
 struct time
 {
-    std::uint32_t s = 0;
-    std::uint32_t ms = 0;
-    std::uint32_t us = 0;
+    uint32_t s = 0;
+    uint32_t ms = 0;
+    uint32_t us = 0;
 };
 
 // Initialize once before workers/IRQs use the clock; repeated init is a no-op.
@@ -28,13 +28,13 @@ const time& now();
 
 float timeline_s();
 float timeline_ms();
-std::uint64_t timeline_us();
+uint64_t timeline_us();
 
-float delta_s(std::uint32_t* last_cnt);
-double delta_s64(std::uint32_t* last_cnt);
+float delta_s(uint32_t* last_cnt);
+double delta_s64(uint32_t* last_cnt);
 
 void delay_s(float seconds);
-void delay_ms(std::uint32_t ms);
-void delay_us(std::uint32_t us);
+void delay_ms(uint32_t ms);
+void delay_us(uint32_t us);
 
 } // namespace bsp::dwt

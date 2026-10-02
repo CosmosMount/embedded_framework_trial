@@ -4,15 +4,15 @@
 #include "config.hpp"
 #include "usertypes.hpp"
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 
 namespace bsp::adc
 {
 
 constexpr bool is_enabled(channel channel_id)
 {
-    return static_cast<std::size_t>(channel_id) < channel_count;
+    return static_cast<uint8_t>(channel_id) < channel_count;
 }
 
 struct conversion_state
@@ -21,12 +21,12 @@ struct conversion_state
     volatile bool complete = false;
     volatile bool dma = false;
     volatile types::status last_status = types::status::ok;
-    volatile std::uint32_t last_value = 0U;
+    volatile uint32_t last_value = 0U;
 };
 
 types::status init(channel channel_id);
 types::status calibrate(channel channel_id);
-types::status read_raw(channel channel_id, std::uint32_t& raw_value, std::uint32_t timeout_ms);
+types::status read_raw(channel channel_id, uint32_t& raw_value, uint32_t timeout_ms);
 types::status start_it(channel channel_id);
 // The DMA buffer contains uint32_t samples and must be a static bsp::dma::buffer<N>
 // object placed with BSP_DMA_BUFFER.

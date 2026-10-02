@@ -169,17 +169,6 @@ function(pnx_ioc_parse ioc_file)
 
 endfunction()
 
-function(pnx_ioc_timer_has_update_dma ioc_lines timer out_var)
-    string(TOUPPER "${timer}" timer_upper)
-    set(found FALSE)
-    foreach(line ${ioc_lines})
-        if(line MATCHES "^Dma\\.Request[0-9]+=${timer_upper}_UP$")
-            set(found TRUE)
-            break()
-        endif()
-    endforeach()
-    set(${out_var} "${found}" PARENT_SCOPE)
-endfunction()
 
 function(pnx_ioc_timer_clock_hz ioc_lines timer out_var)
     string(TOUPPER "${timer}" timer_upper)

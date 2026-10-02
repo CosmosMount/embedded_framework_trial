@@ -1,15 +1,14 @@
 #include "bsp_adc.hpp"
 #include "bsp_adc_binding.hpp"
 
-#include <array>
 
 namespace bsp::adc
 {
 namespace
 {
 
-std::array<conversion_state, channel_count> conversion_states{};
-std::array<bsp::dma::buffer_view, channel_count> dma_buffers{};
+conversion_state conversion_states[channel_count]{};
+bsp::dma::buffer_view dma_buffers[channel_count]{};
 
 types::status get_binding(channel channel_id, detail::binding& binding) noexcept
 {
@@ -24,9 +23,9 @@ types::status get_binding(channel channel_id, detail::binding& binding) noexcept
     return types::status::ok;
 }
 
-std::size_t index_of(ADC_HandleTypeDef* handle) noexcept
+uint8_t index_of(ADC_HandleTypeDef* handle) noexcept
 {
-    for (std::size_t index = 0U; index < channel_count; ++index)
+    for (uint8_t index = 0U; index < channel_count; ++index)
     {
         detail::binding binding{};
         if (detail::binding_for(static_cast<channel>(index), binding) && binding.adc == handle)
@@ -87,7 +86,7 @@ types::status calibrate(channel channel_id)
                : types::status::error;
 }
 
-types::status read_raw(channel channel_id, std::uint32_t& raw_value, std::uint32_t timeout_ms)
+types::status read_raw(channel channel_id, uint32_t& raw_value, uint32_t timeout_ms)
 {
     detail::binding binding{};
     const types::status status = get_binding(channel_id, binding);
@@ -95,7 +94,7 @@ types::status read_raw(channel channel_id, std::uint32_t& raw_value, std::uint32
     {
         return status;
     }
-    const std::size_t index = static_cast<std::size_t>(channel_id);
+    const uint8_t index = static_cast<uint8_t>(channel_id);
     if (conversion_states[index].busy)
     {
         return types::status::busy;
@@ -125,7 +124,7 @@ types::status read_raw(channel channel_id, std::uint32_t& raw_value, std::uint32
         return types::status::error;
     }
 
-    const std::uint32_t value = HAL_ADC_GetValue(binding.adc);
+    const uint32_t value = HAL_ADC_GetValue(binding.adc);
     if (HAL_ADC_Stop(binding.adc) != HAL_OK)
     {
         return types::status::error;
@@ -143,7 +142,7 @@ types::status start_it(channel channel_id)
         return status;
     }
 
-    const std::size_t index = static_cast<std::size_t>(channel_id);
+    const uint8_t index = static_cast<uint8_t>(channel_id);
     conversion_state& state = conversion_states[index];
     if (state.busy)
     {
@@ -183,7 +182,7 @@ types::status start_dma(channel channel_id, bsp::dma::buffer_view buffer)
         return types::status::not_configured;
     }
 
-    const std::size_t index = static_cast<std::size_t>(channel_id);
+    const uint8_t index = static_cast<uint8_t>(channel_id);
     conversion_state& state = conversion_states[index];
     if (state.busy)
     {
@@ -221,7 +220,7 @@ types::status stop_dma(channel channel_id)
         return status;
     }
 
-    const std::size_t index = static_cast<std::size_t>(channel_id);
+    const uint8_t index = static_cast<uint8_t>(channel_id);
     conversion_state& state = conversion_states[index];
     if (!state.dma)
     {
@@ -242,13 +241,13 @@ types::status stop_dma(channel channel_id)
 const conversion_state& state(channel channel_id) noexcept
 {
     static const conversion_state unavailable{false, false, false, types::status::not_configured, 0U};
-    const std::size_t index = static_cast<std::size_t>(channel_id);
+    const uint8_t index = static_cast<uint8_t>(channel_id);
     return index < channel_count ? conversion_states[index] : unavailable;
 }
 
 void handle_conversion_complete(ADC_HandleTypeDef* handle) noexcept
 {
-    const std::size_t index = index_of(handle);
+    const uint8_t index = index_of(handle);
     if (index >= channel_count || !conversion_states[index].busy)
     {
         return;
@@ -271,7 +270,7 @@ void handle_conversion_complete(ADC_HandleTypeDef* handle) noexcept
 
 void handle_error(ADC_HandleTypeDef* handle) noexcept
 {
-    const std::size_t index = index_of(handle);
+    const uint8_t index = index_of(handle);
     if (index >= channel_count)
     {
         return;

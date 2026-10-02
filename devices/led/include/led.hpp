@@ -1,6 +1,7 @@
 #pragma once
 
-#include <cstdint>
+#include <stdint.h>
+#include "usertypes.hpp"
 
 // Currently supports only the H7 SPI-driven WS2812 LED.
 // F4 GPIO indicator LEDs are not supported by this device; use bsp::gpio directly.
@@ -16,11 +17,12 @@ enum class color : uint8_t
     white,
 };
 
-void init();
-void on(color c);
-void toggle(color c);
-void blink(color c);
-void all_off();
-void all_on();
+types::status init();
+types::status on(color c);
+types::status toggle(color c);
+// One step per call; half-period is configured in calls, not RTOS ticks.
+types::status blink(color c);
+types::status all_off();
+types::status all_on();
 
 } // namespace led

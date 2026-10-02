@@ -6,7 +6,7 @@
 #include "motorhandler.hpp"
 #include "robot_config.hpp"
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace motors
 {
@@ -21,7 +21,7 @@ public:
     static dmmotorhandler& instance();
 
     protocol supported_protocol() const noexcept override { return protocol::dm; }
-    bool register_motor(motor& device) noexcept override;
+    types::status register_motor(motor& device) noexcept override;
     types::status start() noexcept override;
     types::status stop() noexcept override;
     types::status send_control() noexcept override;

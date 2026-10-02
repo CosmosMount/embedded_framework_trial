@@ -17,7 +17,7 @@ exti_slot slots[max_exti_slots]{};
 
 types::status bsp::exti::attach(bsp::gpio::input input, interrupt_callback callback)
 {
-    const auto index = static_cast<std::size_t>(input);
+    const auto index = static_cast<uint8_t>(input);
     if (index >= bsp::gpio::input_count || bsp::gpio::input_configs[index].pin > 15U)
     {
         return types::status::not_configured;
