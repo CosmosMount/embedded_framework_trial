@@ -60,15 +60,48 @@ class ConfigurationTests(unittest.TestCase):
         result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/led")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_unsupported_motor_mode_rejected(self):
+    def test_unsupported_motor_options_rejected(self):
         board = "h723_dmmc02"
         path = self.root / "configs/boards" / board / "robot.json"
         data = json.loads(path.read_text(encoding="utf-8"))
-        data["devices"]["motors"]["list"][0]["control_mode"] = "multi"
-        path.write_text(json.dumps(data), encoding="utf-8")
-        result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/unsupported")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("control_mode", result.stdout + result.stderr)
+        for key, value in (("control_mode", "multi"), ("model", "dji_unsupported")):
+            with self.subTest(key=key):
+                invalid = json.loads(json.dumps(data))
+                invalid["devices"]["motors"]["list"][0][key] = value
+                path.write_text(json.dumps(invalid), encoding="utf-8")
+                result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/unsupported")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(key, result.stdout + result.stderr)
+
+    def test_numeric_parameter_contracts(self):
+        board = "h723_dmmc02"
+        path = self.root / "configs/boards" / board / "params.json"
+        original = json.loads(path.read_text())
+        robot_path = path.with_name("robot.json")
+        robot = json.loads(robot_path.read_text())
+        for section, key, value in (
+                ("ahrs", "imu_thread_priority", 1.5),
+                ("ahrs", "imu_thread_priority", "11"),
+                ("ahrs", "target_temp", "40"),
+                ("bmi088", "spi_timeout_ms", -1),
+                ("bmi088", "spi_timeout_ms", 4294967296),
+                ("dmimu", "offline_timeout_ticks", 2147483648),
+                ("dmimu", "receive_wait_ticks", 0),
+                ("dmimu", "request_period_ticks", 1.5),
+                ("remoter", "rx_timeout_ticks", 0),
+                ("remoter", "rx_timeout_ticks", 2147483648)):
+            with self.subTest(section=section, key=key, value=value):
+                robot["devices"]["dmimu"]["enabled"] = section == "dmimu"
+                robot["devices"]["bmi088"]["enabled"] = section != "dmimu"
+                robot_path.write_text(json.dumps(robot))
+                data = dict(original)
+                data[section] = {key: value}
+                if section == "remoter":
+                    data[section]["source"] = "dr16"
+                path.write_text(json.dumps(data))
+                result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/invalid-parameter")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(key, result.stdout + result.stderr)
 
     def test_motor_capacity_rejects_invalid_integer_range(self):
         board = "h723_dmmc02"
