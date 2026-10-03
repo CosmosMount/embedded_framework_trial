@@ -5,7 +5,6 @@
 #include "tx_api.h"
 #include "usertypes.hpp"
 
-#include <stddef.h>
 #include <stdint.h>
 
 namespace bsp::can

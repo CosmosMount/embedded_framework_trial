@@ -39,7 +39,7 @@ IOC 描述引脚、时钟、DMA、NVIC 和外设模式；board 描述固定资�
 
 配置加载器供构建、独立预览和编辑器共用。生成器校验资源与选项，在构建目录生成逻辑标识、设备配置和绑定；`bsp_bindings.cpp` 连接私有硬件，具体设备由其消费者根据生成配置直接装配，例如 gamepad 实现内选择 PS2 GPIO/SPI 对象。生成文件和选源清单是派生产物，不能成为第二份配置源。
 
-构建选择当前板型的 BSP 及其 target.cmake 明确声明的共享 BSP 根目录。SPI、UART、PWM、GPIO、EXTI、USB、DWT 和 DMA 缓冲校验在 `bsp/shared/` 维护一份实现，使用当前生成配置及芯片头；DMA 可达范围和内存布局由板型配置提供，cache 操作按芯片能力编译。CAN 的 bxCAN/FDCAN 差异由板级实现承担，ADC 当前仅 H7 提供。不支持的能力明确拒绝，修改公共契约时同时核对两板。
+构建选择当前板型的 BSP 及其 target.cmake 明确声明的共享 BSP 根目录。SPI、UART、PWM、GPIO、EXTI、USB、DWT 和 DMA 缓冲校验在 `bsp/shared/` 维护一份实现，使用当前生成配置及芯片头；DMA 可达范围和内存布局由板型配置提供，cache 操作按芯片能力编译。CAN 的公共接口在 shared/can 维护一份，bxCAN/FDCAN 实现及私有绑定留在各板目录，ADC 当前仅 H7 提供。不支持的能力明确拒绝，修改公共契约时同时核对两板。
 
 配置启用决定源码选择和绑定，运行启动由应用负责。板级 ThreadX 钩子进入 [app_start()](../../app/app.cpp)，当前入口仅初始化基础日志。产品在此装配所需模块和控制任务，明确启动次序及失败策略；模板不自动启动所有可编译模块。
 

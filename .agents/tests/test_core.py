@@ -253,7 +253,7 @@ class BxCanTests(unittest.TestCase):
             ], text=True, capture_output=True)
             self.assertEqual(generation.returncode, 0, generation.stdout + generation.stderr)
             includes = [ROOT / ".agents/tests/host", root / "generated",
-                        ROOT / "libs/common/include", ROOT / "bsp/f407_cboard/can/include",
+                        ROOT / "libs/common/include", ROOT / "bsp/shared/can/include",
                         ROOT / "bsp/f407_cboard/can/src", ROOT / "libs/log/include"]
             command = [compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror"]
             command.extend(f"-I{path}" for path in includes)
