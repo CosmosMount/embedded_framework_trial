@@ -1,1 +1,2 @@
 set(PNX_BSP_FAMILY "stm32f4")
+set(PNX_BSP_SHARED_ROOT "${CMAKE_CURRENT_LIST_DIR}/../shared")

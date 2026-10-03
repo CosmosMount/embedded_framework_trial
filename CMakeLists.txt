@@ -44,7 +44,11 @@ if(NOT EXISTS "${PNX_BSP_TARGET_FILE}")
         "Selected BSP has no target manifest: ${PNX_BSP_TARGET_FILE}")
 endif()
 unset(PNX_BSP_FAMILY)
+unset(PNX_BSP_SHARED_ROOT)
 include("${PNX_BSP_TARGET_FILE}")
+if(PNX_BSP_SHARED_ROOT)
+    get_filename_component(PNX_BSP_SHARED_ROOT "${PNX_BSP_SHARED_ROOT}" ABSOLUTE)
+endif()
 if(NOT DEFINED PNX_BSP_FAMILY OR NOT PNX_BSP_FAMILY STREQUAL PNX_BOARD_FAMILY)
     message(FATAL_ERROR
         "PNX_BOARD='${PNX_BOARD}' requires BSP family '${PNX_BOARD_FAMILY}', "
@@ -103,14 +107,21 @@ if(PNX_BOARD_FAMILY STREQUAL "stm32f4")
 endif()
 
 function(pnx_exclude_bsp_module source_list module_name)
-    file(TO_CMAKE_PATH "${PNX_BSP_SOURCE_DIR}/${module_name}/" module_prefix)
-    set(filtered_sources)
-    foreach(source IN LISTS ${source_list})
-        file(TO_CMAKE_PATH "${source}" normalized_source)
-        string(FIND "${normalized_source}" "${module_prefix}" module_position)
-        if(NOT module_position EQUAL 0)
-            list(APPEND filtered_sources "${source}")
+    set(filtered_sources ${${source_list}})
+    foreach(bsp_root IN ITEMS "${PNX_BSP_SOURCE_DIR}" "${PNX_BSP_SHARED_ROOT}")
+        if(NOT bsp_root)
+            continue()
         endif()
+        file(TO_CMAKE_PATH "${bsp_root}/${module_name}/" module_prefix)
+        set(retained_sources)
+        foreach(source IN LISTS filtered_sources)
+            file(TO_CMAKE_PATH "${source}" normalized_source)
+            string(FIND "${normalized_source}" "${module_prefix}" module_position)
+            if(NOT module_position EQUAL 0)
+                list(APPEND retained_sources "${source}")
+            endif()
+        endforeach()
+        set(filtered_sources ${retained_sources})
     endforeach()
     set(${source_list} "${filtered_sources}" PARENT_SCOPE)
 endfunction()
@@ -124,6 +135,11 @@ file(GLOB_RECURSE PNX_EMBEDDED_SOURCES CONFIGURE_DEPENDS
 )
 
 list(APPEND PNX_EMBEDDED_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/app/app.cpp")
+if(PNX_BSP_SHARED_ROOT)
+    file(GLOB_RECURSE shared_bsp_sources CONFIGURE_DEPENDS
+        "${PNX_BSP_SHARED_ROOT}/*.c" "${PNX_BSP_SHARED_ROOT}/*.cpp")
+    list(APPEND PNX_EMBEDDED_SOURCES ${shared_bsp_sources})
+endif()
 
 if(NOT ENABLE_USBX)
     pnx_exclude_bsp_module(PNX_EMBEDDED_SOURCES usb)
@@ -196,11 +212,23 @@ if(NOT HAS_DMIMU)
     list(FILTER PNX_EMBEDDED_HEADERS EXCLUDE REGEX "[/\\\\]devices[/\\\\]imu[/\\\\]dmimu[/\\\\]")
 endif()
 
+if(PNX_BSP_SHARED_ROOT)
+    file(GLOB_RECURSE shared_bsp_headers CONFIGURE_DEPENDS
+        "${PNX_BSP_SHARED_ROOT}/*.h" "${PNX_BSP_SHARED_ROOT}/*.hpp")
+    list(APPEND PNX_EMBEDDED_HEADERS ${shared_bsp_headers})
+endif()
+
 set(PNX_EMBEDDED_INCLUDE_DIRS)
 set(PNX_BSP_PRIVATE_INCLUDE_DIRS)
 foreach(header IN LISTS PNX_EMBEDDED_HEADERS)
     get_filename_component(header_dir "${header}" DIRECTORY)
     cmake_path(IS_PREFIX PNX_BSP_SOURCE_DIR "${header}" NORMALIZE is_bsp_header)
+    if(PNX_BSP_SHARED_ROOT)
+        cmake_path(IS_PREFIX PNX_BSP_SHARED_ROOT "${header}" NORMALIZE is_shared_bsp_header)
+        if(is_shared_bsp_header)
+            set(is_bsp_header TRUE)
+        endif()
+    endif()
     if(is_bsp_header AND header_dir MATCHES "/src$")
         list(APPEND PNX_BSP_PRIVATE_INCLUDE_DIRS "${header_dir}")
     else()
@@ -211,6 +239,12 @@ list(REMOVE_DUPLICATES PNX_EMBEDDED_INCLUDE_DIRS)
 list(REMOVE_DUPLICATES PNX_BSP_PRIVATE_INCLUDE_DIRS)
 foreach(source IN LISTS PNX_EMBEDDED_SOURCES)
     cmake_path(IS_PREFIX PNX_BSP_SOURCE_DIR "${source}" NORMALIZE is_bsp_source)
+    if(PNX_BSP_SHARED_ROOT)
+        cmake_path(IS_PREFIX PNX_BSP_SHARED_ROOT "${source}" NORMALIZE is_shared_bsp_source)
+        if(is_shared_bsp_source)
+            set(is_bsp_source TRUE)
+        endif()
+    endif()
     if(is_bsp_source)
         set_property(SOURCE "${source}" APPEND PROPERTY
             INCLUDE_DIRECTORIES "${PNX_BSP_PRIVATE_INCLUDE_DIRS}")
@@ -229,7 +263,17 @@ set(CMSIS_DSP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/cmsis-dsp/Source/MatrixFunctions/arm_mat_trans_f32.c"
 )
 
+# Both AHRS implementations share the same compiled CMSIS-DSP kernels.
+add_library(cmsis_dsp STATIC ${CMSIS_DSP_SOURCES})
+target_include_directories(cmsis_dsp PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/cmsis-dsp/Include")
+target_include_directories(cmsis_dsp PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/${PNX_BOARD}/Drivers/CMSIS/Include")
+
 add_executable(${PROJECT_NAME})
+# Product math reports errors through values/status, never through errno.
+# Allow sqrtf to become a hardware instruction without enabling fast-math.
+target_compile_options(${PROJECT_NAME} PRIVATE
+    "$<$<COMPILE_LANGUAGE:C,CXX>:-fno-math-errno>")
 set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${PNX_BOARD_LINKER_SCRIPT}")
 
 add_subdirectory("${PNX_BOARD_CUBEMX_DIR}" "${CMAKE_BINARY_DIR}/stm32cubemx")
@@ -242,7 +286,6 @@ include("${PNX_EMBEDDED_CONFIG_DIR}/cmake/usbx_integration.cmake")
 
 target_sources(${PROJECT_NAME} PRIVATE
     ${PNX_EMBEDDED_SOURCES}
-    ${CMSIS_DSP_SOURCES}
     "${PNX_EMBEDDED_GENERATED_DIR}/bsp_bindings.cpp"
 )
 
@@ -252,7 +295,7 @@ set(PNX_EMBEDDED_SOURCE_MANIFEST "${CMAKE_BINARY_DIR}/pnx_embedded_sources.txt")
 list(JOIN PNX_EMBEDDED_SOURCES "\n" PNX_EMBEDDED_SOURCE_MANIFEST_BODY)
 list(JOIN CMSIS_DSP_SOURCES "\n" PNX_EMBEDDED_CMSIS_SOURCE_MANIFEST_BODY)
 string(CONCAT pnx_source_manifest_content
-    "# Sources selected directly by the PNX product target. Generated during configure.\n"
+    "# Sources selected by the PNX product and CMSIS-DSP targets. Generated during configure.\n"
     "${PNX_EMBEDDED_SOURCE_MANIFEST_BODY}\n"
     "${PNX_EMBEDDED_CMSIS_SOURCE_MANIFEST_BODY}\n"
     "${PNX_EMBEDDED_GENERATED_DIR}/bsp_bindings.cpp\n")
@@ -273,6 +316,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 
 target_link_libraries(${PROJECT_NAME}
     stm32cubemx
+    cmsis_dsp
 )
 
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
