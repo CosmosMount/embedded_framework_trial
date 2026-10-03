@@ -7,6 +7,7 @@
 #include "config.hpp"
 
 #include <type_traits>
+#include <atomic>
 
 namespace referee
 {
@@ -83,6 +84,47 @@ public:
     snapshot read_snapshot() const noexcept;
 
 private:
+    struct receive_fifo
+    {
+        // One ISR producer and one thread consumer. Full buffers drop NEW bytes;
+        // already accepted stream bytes retain their order. No allocation or wait.
+        static constexpr uint32_t capacity = 256U;
+        static_assert(std::atomic<uint32_t>::is_always_lock_free);
+
+        void push(const uint8_t* data, uint16_t len)
+        {
+            if (data == nullptr) return;
+            for (uint16_t i = 0; i < len; ++i)
+            {
+                const auto write = head_.load(std::memory_order_relaxed);
+                if (write - tail_.load(std::memory_order_acquire) == capacity)
+                {
+                    dropped_.fetch_add(1U, std::memory_order_relaxed);
+                    continue;
+                }
+                buffer_[write % capacity] = data[i];
+                head_.store(write + 1U, std::memory_order_release);
+            }
+        }
+
+        bool pop(uint8_t& byte)
+        {
+            const auto read = tail_.load(std::memory_order_relaxed);
+            if (read == head_.load(std::memory_order_acquire)) return false;
+            byte = buffer_[read % capacity];
+            tail_.store(read + 1U, std::memory_order_release);
+            return true;
+        }
+
+        uint32_t dropped_bytes() const { return dropped_.load(std::memory_order_relaxed); }
+
+    private:
+        uint8_t buffer_[capacity]{};
+        std::atomic<uint32_t> head_{0};
+        std::atomic<uint32_t> tail_{0};
+        std::atomic<uint32_t> dropped_{0};
+    };
+
     static void thread_entry(ULONG arg);
     types::status create_resources();
     static void on_rx(bsp::usart::port port, const bsp::usart::rx_frame& frame);
@@ -92,7 +134,7 @@ private:
     TX_SEMAPHORE heartbeat_sem_{};
     alignas(8) uint8_t stack_[1536]{};
 
-    RefereeRingBuffer rx_fifo_{};
+    receive_fifo rx_fifo_{};
     snapshot working_{};
     snapshot published_{};
     types::status initialization_status_ = types::status::not_initialized;

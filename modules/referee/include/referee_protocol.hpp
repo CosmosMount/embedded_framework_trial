@@ -2,7 +2,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <atomic>
 
 /* 通信协议内容: 常规链路由裁判系统服务器和主控模块进行数据转发，从电源管理模块的User串口收发数据 */
 
@@ -392,54 +391,6 @@ enum RefereeID
     CustomClientData = 0x0309,        // 自定义控制器接收机器人数据，频率上限10Hz
     Robot2CustomClient = 0x0310,      // 机器人发送给自定义客户端，频率上限50Hz
     CustomClient2Robot = 0x0311,      // 自定义客户端发送给机器人，频率上限75Hz
-};
-
-struct RefereeRingBuffer
-{
-    // One ISR producer and one thread consumer. Full buffers drop NEW bytes;
-    // already accepted stream bytes retain their order. No allocation or wait.
-    static constexpr uint32_t capacity = 256U;
-    static_assert(std::atomic<uint32_t>::is_always_lock_free);
-
-    void push(const uint8_t* data, uint16_t len)
-    {
-        if (data == nullptr) return;
-        for (uint16_t i = 0; i < len; ++i)
-        {
-            const auto write = head_.load(std::memory_order_relaxed);
-            if (write - tail_.load(std::memory_order_acquire) == capacity)
-            {
-                dropped_.fetch_add(1U, std::memory_order_relaxed);
-                continue;
-            }
-            buffer_[write % capacity] = data[i];
-            head_.store(write + 1U, std::memory_order_release);
-        }
-    }
-
-    bool pop(uint8_t& byte)
-    {
-        const auto read = tail_.load(std::memory_order_relaxed);
-        if (read == head_.load(std::memory_order_acquire)) return false;
-        byte = buffer_[read % capacity];
-        tail_.store(read + 1U, std::memory_order_release);
-        return true;
-    }
-
-    uint32_t dropped_bytes() const { return dropped_.load(std::memory_order_relaxed); }
-
-private:
-    uint8_t buffer_[capacity]{};
-    std::atomic<uint32_t> head_{0};
-    std::atomic<uint32_t> tail_{0};
-    std::atomic<uint32_t> dropped_{0};
-};
-
-enum UnpackState
-{
-    STEP_HEADER_SOF = 0,
-    STEP_LENGTH_SEQ,
-    STEP_DATA_CRC16,
 };
 
 namespace referee::protocol

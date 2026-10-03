@@ -2,10 +2,8 @@
 
 #include "bsp_usart.hpp"
 #include "config.hpp"
-#include "crc.hpp"
 
 #include <stdint.h>
-#include <cstring>
 
 namespace ui
 {
@@ -226,7 +224,7 @@ private:
 
     int8_t create_and_init_object();
 
-    types::status send_data(uint8_t* data, uint16_t len);
+    types::status send_frame(uint16_t len);
     types::status transmit_string_object(uint8_t index, operation op);
     types::status transmit_other_objects(uint8_t count);
 };

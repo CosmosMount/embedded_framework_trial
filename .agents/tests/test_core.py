@@ -37,7 +37,7 @@ class CoreTests(unittest.TestCase):
             raise RuntimeError(generation.stdout + generation.stderr)
         cls.executable = root / "core_tests.exe"
         includes = [ROOT / ".agents/tests/host", root / "generated"]
-        for tree in ("libs", "bsp/h723_dmmc02", "devices", "modules"):
+        for tree in ("libs", "bsp/h723_dmmc02", "bsp/shared", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
         sources = [ROOT / ".agents/tests/host/test_core.cpp", ROOT / "libs/control/src/pid.cpp",
                    ROOT / "libs/math/src/constrain.cpp",
@@ -59,7 +59,7 @@ class CoreTests(unittest.TestCase):
     def test_bmi088_transactions_and_duration_stats(self):
         root = Path(self.temp.name).resolve()
         includes = [ROOT / ".agents/tests/host", root / "generated"]
-        for tree in ("libs", "bsp/h723_dmmc02", "devices", "modules"):
+        for tree in ("libs", "bsp/h723_dmmc02", "bsp/shared", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
         binary = root / "bmi088.exe"
         command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror", "-mno-ms-bitfields"]
@@ -75,7 +75,7 @@ class CoreTests(unittest.TestCase):
     def compile_and_run_device(self, name, *sources):
         root = Path(self.temp.name).resolve()
         includes = [ROOT / ".agents/tests/host", root / "generated"]
-        for tree in ("libs", "bsp/h723_dmmc02", "devices", "modules"):
+        for tree in ("libs", "bsp/h723_dmmc02", "bsp/shared", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
         if name == "dmimu":
             configured = root / "dmimu_enabled"
@@ -85,6 +85,8 @@ class CoreTests(unittest.TestCase):
             config = config.replace("#define HAS_DMIMU 0", "#define HAS_DMIMU 1")
             (configured / "config.hpp").write_text(config)
             includes.insert(0, configured)
+        if name == "fdcan":
+            includes.append(ROOT / "bsp/h723_dmmc02/can/src")
         binary = root / f"{name}.exe"
         command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror"]
         command.extend(f"-I{path}" for path in includes)
@@ -100,6 +102,10 @@ class CoreTests(unittest.TestCase):
                  ["thread_failure"], ["msg_failure"]] if name == "remotes" else [[]]
         if name == "dmimu":
             cases += [[case] for case in ("success", "semaphore", "topic", "thread", "cleanup", "stale_thread", "fresh_thread")]
+        if name == "referee":
+            cases += [[case] for case in ("overflow", "split")]
+        if name == "fdcan":
+            cases += [[case] for case in ("config_failure", "enable_failure")]
         for arguments in cases:
             with self.subTest(case=arguments):
                 result = subprocess.run([str(binary), *arguments], text=True, capture_output=True)
@@ -107,6 +113,9 @@ class CoreTests(unittest.TestCase):
 
     def test_referee_bounded_receive(self):
         self.compile_and_run_device("referee", "modules/referee/src/referee.cpp", "libs/crc/src/crc.cpp")
+
+    def test_h7_fdcan_initialization(self):
+        self.compile_and_run_device("fdcan", "bsp/h723_dmmc02/can/src/bsp_can.cpp", "libs/log/src/log.cpp")
 
     def test_ui_submission(self):
         self.compile_and_run_device("ui", "devices/ui/src/ui.cpp", "libs/crc/src/crc.cpp")
@@ -160,7 +169,7 @@ class CoreTests(unittest.TestCase):
         ], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         includes = [ROOT / ".agents/tests/host", root / "generated"]
-        for tree in ("libs", "bsp/h723_dmmc02", "devices", "modules"):
+        for tree in ("libs", "bsp/h723_dmmc02", "bsp/shared", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
         binary = root / "gamepad.exe"
         command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror",
@@ -172,7 +181,7 @@ class CoreTests(unittest.TestCase):
         command.extend(["-o", str(binary)])
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for case in ("success", "device", "topic", "thread", "cleanup"):
+        for case in ("success", "device", "topic", "thread", "cleanup", "flow"):
             with self.subTest(case=case):
                 result = subprocess.run([str(binary), case], text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -198,6 +207,21 @@ class CoreTests(unittest.TestCase):
 
     def test_pid_modes(self):
         self.check_case("pid")
+
+    def test_ahrs_with_cmsis_dsp(self):
+        binary = Path(self.temp.name) / "ahrs.exe"
+        command = [shutil.which("g++"), "-std=c++17", "-O2", "-fno-math-errno", "-D__GNUC_PYTHON__"]
+        command.extend(f"-I{ROOT / path}" for path in (
+            "libs/math/include", "libs/filter/include", "modules/ahrs/include", "modules/ahrs/tactical", "cmsis-dsp/Include"))
+        command.extend(str(ROOT / path) for path in (
+            ".agents/tests/host/test_ahrs.cpp", "modules/ahrs/tactical/tactical_fusion.cpp",
+            "libs/math/src/constrain.cpp", "cmsis-dsp/Source/BasicMathFunctions/arm_dot_prod_f32.c"))
+        command.extend(str(path) for path in sorted((ROOT / "cmsis-dsp/Source/MatrixFunctions").glob("*.c")))
+        command.extend(["-o", str(binary)])
+        result = subprocess.run(command, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = subprocess.run([str(binary)], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_callback_bindings(self):
         self.check_case("callbacks")

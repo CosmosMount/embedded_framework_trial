@@ -1,4 +1,5 @@
 #include "xv2protocol.hpp"
+#include "constants.hpp"
 
 namespace motors::xv2
 {
@@ -176,14 +177,15 @@ bool parse_feedback(uint8_t address, const uint8_t* data, uint8_t len, feedback&
         case static_cast<uint8_t>(sys_param::velocity):
             if (len >= 5)
             {
-                output.velocity = static_cast<float>(static_cast<int16_t>(be_u16(&data[2]))) * 0.1f;
+                const float rpm = static_cast<float>(static_cast<int16_t>(be_u16(&data[2]))) * 0.1f;
+                output.velocity = rpm * (math::two_pi / 60.0f);
                 return true;
             }
             break;
         case static_cast<uint8_t>(sys_param::position):
             if (len >= 7)
             {
-                output.position = static_cast<float>(be_u32(&data[2])) * 0.1f;
+                output.position = math::degrees_to_radians(static_cast<float>(be_u32(&data[2])) * 0.1f);
                 return true;
             }
             break;

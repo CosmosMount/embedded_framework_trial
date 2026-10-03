@@ -5,6 +5,7 @@
 #include "djimotors.hpp"
 #include "dmmotors.hpp"
 #include "lkmotors.hpp"
+#include "xv2motors.hpp"
 
 namespace robot::devices::motors
 {
@@ -58,6 +59,18 @@ template <>
 struct model_traits<robot::motors::model::lk_lk9025>
 {
     using type = ::motors::lk9025;
+};
+
+template <>
+struct model_traits<robot::motors::model::xv2_x42>
+{
+    using type = ::motors::x42;
+};
+
+template <>
+struct model_traits<robot::motors::model::xv2_y42>
+{
+    using type = ::motors::y42;
 };
 
 template <robot::motors::model Model>

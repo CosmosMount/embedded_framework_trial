@@ -11,6 +11,13 @@ namespace referee
 
 namespace
 {
+enum UnpackState
+{
+    STEP_HEADER_SOF = 0,
+    STEP_LENGTH_SEQ,
+    STEP_DATA_CRC16,
+};
+
 bsp::dma::buffer<256> rx_buffer_storage BSP_DMA_BUFFER{};
 
 enum class decode_result : uint8_t
@@ -164,7 +171,7 @@ void receiver::thread_entry(ULONG arg)
     for (;;)
     {
         // Bound each batch even if the ISR keeps adding bytes while we parse.
-        for (uint16_t processed = 0; processed < RefereeRingBuffer::capacity &&
+        for (uint16_t processed = 0; processed < receive_fifo::capacity &&
              self->rx_fifo_.pop(rx_byte); ++processed)
         {
             switch (state)

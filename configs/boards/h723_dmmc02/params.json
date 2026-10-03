@@ -6,7 +6,9 @@
   },
   "can": {
     "fdcan1": {
-      "id_type": "standard"
+      "id_type": "standard",
+      "tdc_offset": 13,
+      "tdc_filter": 13
     },
     "fdcan2": {
       "id_type": "standard"

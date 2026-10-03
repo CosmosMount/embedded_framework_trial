@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Inputs: IOC, BOARD_CONFIG, PARAMS, ROBOT_CONFIG, OUT_DIR, PNX_BOARD_FAMILY.
-# Outputs: four build-local C++ files; feature flags and resource counts used
+# Outputs: three build-local C++ files; feature flags and resource counts used
 # by the parent CMake source selection. Also callable directly with cmake -P.
 # Keep helpers here: the parser is hardware-only, this file owns JSON semantics.
 include("${CMAKE_CURRENT_LIST_DIR}/import_ioc.cmake")
@@ -90,7 +90,7 @@ function(_pnx_motor_model_expr model out_var)
         set(model_lower "unknown")
     endif()
     set(supported_models dji_m2006 dji_m3508 dji_gm6020 dji_xroll
-        dm_dm4310 dm_dm8009p lk_lk8016 lk_lk9025 unknown)
+        dm_dm4310 dm_dm8009p lk_lk8016 lk_lk9025 xv2_x42 xv2_y42 unknown)
     if(NOT model_lower IN_LIST supported_models)
         message(FATAL_ERROR "robot motor model ${model} is not supported")
     endif()
@@ -850,8 +850,31 @@ foreach(hw ${PNX_IOC_CAN_HW})
     endif()
     list(APPEND can_id_type_list "${can_id_type_expr}")
 
+    set(tdc_enabled false)
+    set(tdc_offset 0)
+    set(tdc_filter 0)
+    string(JSON tdc_offset_type ERROR_VARIABLE tdc_offset_error TYPE "${params_json}" can ${hw_lower} tdc_offset)
+    string(JSON tdc_filter_type ERROR_VARIABLE tdc_filter_error TYPE "${params_json}" can ${hw_lower} tdc_filter)
+    if(NOT tdc_offset_error OR NOT tdc_filter_error)
+        if(tdc_offset_error OR tdc_filter_error OR
+           NOT tdc_offset_type STREQUAL "NUMBER" OR NOT tdc_filter_type STREQUAL "NUMBER")
+            message(FATAL_ERROR "params.can.${hw_lower} requires numeric tdc_offset and tdc_filter together")
+        endif()
+        if(NOT ioc_can_capability STREQUAL "fd_brs")
+            message(FATAL_ERROR "params.can.${hw_lower} TDC requires IOC CAN FD with bit rate switching")
+        endif()
+        string(JSON tdc_offset GET "${params_json}" can ${hw_lower} tdc_offset)
+        string(JSON tdc_filter GET "${params_json}" can ${hw_lower} tdc_filter)
+        foreach(tdc_value IN ITEMS tdc_offset tdc_filter)
+            if(NOT "${${tdc_value}}" MATCHES "^[0-9]+$" OR ${tdc_value} GREATER 127)
+                message(FATAL_ERROR "params.can.${hw_lower}.${tdc_value} must be an integer in [0, 127]")
+            endif()
+        endforeach()
+        set(tdc_enabled true)
+    endif()
+
     list(APPEND can_config_list
-        "{ true, handle_id::${hw_lower}, ${can_type_expr}, ${can_capability_expr}, ${can_id_type_expr} }")
+        "{ true, handle_id::${hw_lower}, ${can_type_expr}, ${can_capability_expr}, ${can_id_type_expr}, ${tdc_enabled}, ${tdc_offset}U, ${tdc_filter}U }")
 
     set("PNX_CAN_TYPE_${hw_lower}" "${ioc_can_type}")
     if(can_id_type_expr STREQUAL "id_type::extended")
@@ -1524,7 +1547,6 @@ endforeach()
 set(CONFIG_HPP "${OUT_DIR}/config.hpp")
 set(ROBOT_CONFIG_HPP "${OUT_DIR}/robot_config.hpp")
 set(BSP_BINDINGS_CPP "${OUT_DIR}/bsp_bindings.cpp")
-set(MODULE_BINDINGS_HPP "${OUT_DIR}/module_bindings.hpp")
 
 _pnx_write_generated("${CONFIG_HPP}"
 "#pragma once\n"
@@ -1588,6 +1610,9 @@ _pnx_write_generated("${CONFIG_HPP}"
 "    bus_type type = bus_type::classic;\n"
 "    bus_capability capability = bus_capability::classic;\n"
 "    id_type filter_id_type = id_type::standard;\n"
+"    bool tdc_enabled = false;\n"
+"    uint8_t tdc_offset = 0;\n"
+"    uint8_t tdc_filter = 0;\n"
 "};\n\n"
 "inline constexpr uint8_t bus_count = ${can_bus_count};\n"
 "inline constexpr uint8_t max_rx_callbacks = ${can_max_rx_callbacks};\n"
@@ -1709,29 +1734,6 @@ _pnx_write_generated("${CONFIG_HPP}"
 )
 
 message(STATUS "Generated ${CONFIG_HPP}")
-
-set(ps2_device_binding_body "")
-if(HAS_PS2_DEVICE)
-    if(PS2_BACKEND_SPI)
-        set(ps2_device_binding_body
-            "inline ::remotes::ps2::spi gamepad_device{board::device::ps2::spi, board::device::ps2::cs}${generated_semicolon_token}\n")
-    else()
-        set(ps2_device_binding_body
-            "inline ::remotes::ps2::gpio gamepad_device{board::device::ps2::cmd, board::device::ps2::data, board::device::ps2::clk, board::device::ps2::cs}${generated_semicolon_token}\n")
-    endif()
-endif()
-
-_pnx_write_generated("${MODULE_BINDINGS_HPP}"
-"#pragma once\n"
-"// Generated from the selected board IOC and configuration. Do not edit.\n\n"
-"#include \"config.hpp\"\n\n"
-"#if HAS_PS2_DEVICE\n"
-"#include \"ps2.hpp\"\n\n"
-"namespace remoter::binding {\n\n"
-"${ps2_device_binding_body}"
-"} // namespace remoter::binding\n"
-"#endif // HAS_PS2_DEVICE\n")
-message(STATUS "Generated ${MODULE_BINDINGS_HPP}")
 
 set(bsp_bindings_cpp_includes "")
 set(bsp_bindings_cpp_body "")
@@ -2270,6 +2272,8 @@ _pnx_write_generated("${ROBOT_CONFIG_HPP}"
 "    dm_dm8009p,\n"
 "    lk_lk8016,\n"
 "    lk_lk9025,\n"
+"    xv2_x42,\n"
+"    xv2_y42,\n"
 "};\n\n"
 "namespace dm {\n"
 "inline constexpr uint32_t id_base = ${robot_dm_id_base}U;\n"

@@ -1,4 +1,5 @@
 #include "ui.hpp"
+#include "crc.hpp"
 #include <vector>
 #include <cstring>
 #include <stdexcept>
@@ -58,6 +59,10 @@ int main() {
     require(canvas.remove_layer(2) == status::busy);
     result = status::ok;
     require(canvas.update() == status::ok && operation() == 2);
+    require(canvas.remove_layer(2) == status::ok && content() == 0x100 &&
+            sent[13] == 1 && sent[14] == 2);
+    previous = calls;
+    require(canvas.remove_layer(16) == status::invalid_arg && calls == previous);
     require(canvas.remove_all() == status::ok);
     previous=calls; require(canvas.update() == status::ok && calls==previous);
 }

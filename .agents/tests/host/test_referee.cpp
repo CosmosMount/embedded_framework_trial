@@ -1,6 +1,7 @@
 #include "referee.hpp"
 #include "crc.hpp"
 #include <stdexcept>
+#include <cstring>
 using types::status;
 namespace {
 bsp::usart::rx_callback receive;
@@ -8,10 +9,14 @@ void (*worker)(ULONG) = nullptr;
 ULONG worker_arg = 0;
 uint8_t frame[10] = {0xa5,1,0,0,0,0x06,0x02,0,0,0};
 unsigned updates = 0, sleeps = 0;
+enum class scenario { flow, overflow, split };
+scenario selected = scenario::flow;
 struct finished {};
 void require(bool c) { if (!c) throw std::runtime_error("referee bounded receive"); }
 void updated(const referee::packet_store&, const referee::update_info&) {
-    if (++updates < 100) receive(app::uart::referee,{frame,sizeof(frame)});
+    ++updates;
+    if (selected == scenario::flow && updates < 100)
+        receive(app::uart::referee,{frame,sizeof(frame)});
 }
 }
 namespace bsp::usart {
@@ -34,16 +39,39 @@ UINT tx_thread_delete(TX_THREAD*) { return TX_SUCCESS; }
 UINT tx_thread_sleep(ULONG ticks) {
     require(ticks == 1);
     auto snapshot = referee::receiver::instance().read_snapshot();
+    if (selected == scenario::overflow)
+    {
+        require(snapshot.sequence == 25 && updates == 25 && snapshot.communication.rx_dropped_bytes == 44);
+        throw finished{};
+    }
+    if (selected == scenario::split)
+    {
+        if (++sleeps == 1)
+        {
+            require(snapshot.sequence == 0);
+            receive(app::uart::referee, {frame + 4, sizeof(frame) - 4});
+            return TX_SUCCESS;
+        }
+        require(snapshot.sequence == 1 && updates == 1);
+        throw finished{};
+    }
     require(snapshot.sequence == updates && snapshot.received_tick == 7);
     if (++sleeps == 1) require(updates == 25);
     else { require(updates == 51); throw finished{}; }
     return TX_SUCCESS;
 }
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1) selected = std::strcmp(argv[1], "overflow") == 0 ? scenario::overflow : scenario::split;
     crc::append_crc8_checksum(frame,5); crc::append_crc16_checksum(frame,sizeof(frame));
     referee::config cfg{}; cfg.on_update=referee::update_callback::bind<&updated>();
     require(referee::receiver::instance().init(cfg) == status::ok);
-    receive(app::uart::referee,{frame,sizeof(frame)});
+    if (selected == scenario::overflow)
+    {
+        uint8_t burst[300]{};
+        for (unsigned i = 0; i < 30; ++i) std::memcpy(burst + i * sizeof(frame), frame, sizeof(frame));
+        receive(app::uart::referee, {burst, sizeof(burst)});
+    }
+    else receive(app::uart::referee, {frame, selected == scenario::split ? 4U : sizeof(frame)});
     try { worker(worker_arg); } catch (finished&) { return 0; }
     return 1;
 }

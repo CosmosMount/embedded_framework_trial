@@ -6,6 +6,8 @@
 #include "lkmotorhandler.hpp"
 #include "dmmotorhandler.hpp"
 #include "xv2motorhandler.hpp"
+#include "constants.hpp"
+#include "motortraits.hpp"
 
 #include <array>
 #include <cmath>
@@ -16,6 +18,8 @@
 
 namespace
 {
+static_assert(std::is_same_v<robot::devices::motors::model_type_t<robot::motors::model::xv2_x42>, motors::x42>);
+static_assert(std::is_same_v<robot::devices::motors::model_type_t<robot::motors::model::xv2_y42>, motors::y42>);
 bool allow_wait = false;
 ULONG motor_tick = 0;
 void require(bool condition, const char* message)
@@ -195,6 +199,21 @@ void test_motors()
     for (auto callback : callbacks[0]) callback(bus, feedback);
     require(high_slot.alive == 1 && first_slot.alive == 0, "DM feedback dispatch preserves full slot");
     transmit_status = types::status::ok;
+    motors::config xv2_config{};
+    xv2_config.can_bus = bus;
+    xv2motor xv2_device(xv2_config);
+    require(xv2_device.set_pos_speed(-math::pi, math::two_pi) == types::status::ok,
+            "XV2 physical position and velocity command");
+    sent.clear();
+    require(xv2_device.set_output() == types::status::ok && sent.size() == 1 &&
+            sent[0].data == std::vector<uint8_t>({1, 0xfb, 1, 2, 0x58, 0, 0, 7, 8, 1, 0, 0x6b}),
+            "XV2 converts radians to degrees and radians per second to RPM");
+    const uint8_t xv2_speed[] = {1, 0x35, 2, 0x58, 0x6b};
+    const uint8_t xv2_position[] = {1, 0x36, 0, 0, 7, 8, 0x6b};
+    xv2_device.parse_feedback(xv2_speed, sizeof(xv2_speed));
+    xv2_device.parse_feedback(xv2_position, sizeof(xv2_position));
+    near(xv2_device.get_feedback().velocity, math::two_pi, "XV2 feedback velocity is radians per second");
+    near(xv2_device.get_feedback().position, math::pi, "XV2 feedback position is radians");
     allow_wait = true;
     require(dm.enable_block(&first_slot) == types::status::timeout && first_slot.enablefailed,
             "enable handshake timeout is explicit");

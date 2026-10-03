@@ -1,15 +1,8 @@
 #include "xv2motors.hpp"
+#include "constants.hpp"
 
 namespace motors
 {
-
-namespace
-{
-
-constexpr float rad_to_deg_scale = 57.29577951308232f;
-constexpr float rad_s_to_rpm_scale = 9.54929658551372f;
-
-} // namespace
 
 xv2motor::xv2motor(config cfg, options opts) : motor(cfg, 0.0f), options_(opts)
 {
@@ -30,11 +23,11 @@ types::status xv2motor::set_output()
             return transmit(xv2::torque(options_.address, cmd.current, options_.current_ramp_ma_s,
                                   options_.sync));
         case mode::pos_speed:
-            return transmit(xv2::position_speed(options_.address, rad_to_deg(cmd.position),
-                                          rad_s_to_rpm(cmd.velocity),
+            return transmit(xv2::position_speed(options_.address, math::radians_to_degrees(cmd.position),
+                                          cmd.velocity * (60.0f / math::two_pi),
                                           options_.position_reference, options_.sync));
         case mode::speed:
-            return transmit(xv2::velocity(options_.address, rad_s_to_rpm(cmd.velocity),
+            return transmit(xv2::velocity(options_.address, cmd.velocity * (60.0f / math::two_pi),
                                     options_.acceleration_rpm_s, options_.sync));
         default:
         {
@@ -90,16 +83,6 @@ types::status xv2motor::request_feedback(xv2::sys_param param)
 types::status xv2motor::transmit(const xv2::frame& frame)
 {
     return bsp::can::transmit(can_bus(), options_.tx_id, frame.data, frame.len);
-}
-
-float xv2motor::rad_to_deg(float rad)
-{
-    return rad * rad_to_deg_scale;
-}
-
-float xv2motor::rad_s_to_rpm(float rad_s)
-{
-    return rad_s * rad_s_to_rpm_scale;
 }
 
 } // namespace motors

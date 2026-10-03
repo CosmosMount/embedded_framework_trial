@@ -2,7 +2,6 @@
 
 #include "motor.hpp"
 
-#include <stddef.h>
 #include <stdint.h>
 
 namespace motors::xv2

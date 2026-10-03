@@ -1,4 +1,5 @@
 #include "ui.hpp"
+#include "crc.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -69,10 +70,12 @@ int8_t canvas::create_and_init_object()
     return static_cast<int8_t>(id_error_code::no_more_space);
 }
 
-types::status canvas::send_data(uint8_t* data, uint16_t len)
+types::status canvas::send_frame(uint16_t len)
 {
     if (!initialized_) return types::status::not_initialized;
-    return bsp::usart::transmit(cfg_.uart_port, data, len, params::ui::uart_timeout_ms);
+    crc::append_crc8_checksum(tx_buffer_, 5);
+    crc::append_crc16_checksum(tx_buffer_, len);
+    return bsp::usart::transmit(cfg_.uart_port, tx_buffer_, len, params::ui::uart_timeout_ms);
 }
 
 void canvas::set_sender_receiver_id(uint16_t sender_id, uint16_t receiver_id)
@@ -493,14 +496,12 @@ types::status canvas::remove_all()
     delete_op_.layer = 0;
 
     header->data_length = 8;
-    crc::append_crc8_checksum(reinterpret_cast<uint8_t*>(header), 5);
     header->content_id = 0x0100;
 
     std::memcpy(tx_buffer_ + sizeof(tx_frame_header), &delete_op_, sizeof(delete_op_));
 
     constexpr uint16_t frame_len = sizeof(tx_frame_header) + sizeof(delete_op_) + 2;
-    crc::append_crc16_checksum(tx_buffer_, frame_len);
-    const auto status = send_data(tx_buffer_, frame_len);
+    const auto status = send_frame(frame_len);
     if (status != types::status::ok) return status;
 
     std::memset(object_list_, 0, sizeof(object_list_));
@@ -517,14 +518,12 @@ types::status canvas::remove_layer(int layer)
     delete_op_.layer = static_cast<uint8_t>(layer);
 
     header->data_length = 8;
-    crc::append_crc8_checksum(reinterpret_cast<uint8_t*>(header), 5);
     header->content_id = 0x0100;
 
     std::memcpy(tx_buffer_ + sizeof(tx_frame_header), &delete_op_, sizeof(delete_op_));
 
     constexpr uint16_t frame_len = sizeof(tx_frame_header) + sizeof(delete_op_) + 2;
-    crc::append_crc16_checksum(tx_buffer_, frame_len);
-    const auto status = send_data(tx_buffer_, frame_len);
+    const auto status = send_frame(frame_len);
     if (status != types::status::ok) return status;
 
     for (auto& obj : object_list_)
@@ -545,7 +544,6 @@ types::status canvas::transmit_string_object(uint8_t index, operation op)
     auto& obj = object_list_[index];
     auto* header = frame_header();
     header->data_length = 51;
-    crc::append_crc8_checksum(reinterpret_cast<uint8_t*>(header), 5);
     header->content_id = 0x0110;
 
     auto* meta = buffer_nth_object(0);
@@ -560,8 +558,7 @@ types::status canvas::transmit_string_object(uint8_t index, operation op)
     std::fill(str_buf, str_buf + string_max_length, 0);
     std::strncpy(str_buf, obj.detail_dword3.str_val,
                  std::min(static_cast<uint8_t>(obj.detail_dword1.detail_b), string_max_length));
-    crc::append_crc16_checksum(tx_buffer_, 60);
-    return send_data(tx_buffer_, 60);
+    return send_frame(60);
 }
 
 types::status canvas::transmit_other_objects(uint8_t count)
@@ -569,7 +566,6 @@ types::status canvas::transmit_other_objects(uint8_t count)
     const uint8_t element_count = element_count_in_packet_table[count];
     auto* header = frame_header();
     header->data_length = static_cast<uint16_t>(6 + element_count * 15);
-    crc::append_crc8_checksum(reinterpret_cast<uint8_t*>(header), 5);
     header->content_id = content_id_table[count];
 
     for (uint8_t i = count; i < element_count; ++i)
@@ -579,8 +575,7 @@ types::status canvas::transmit_other_objects(uint8_t count)
     }
 
     const uint8_t length = static_cast<uint8_t>(13 + element_count * 15 + 2);
-    crc::append_crc16_checksum(tx_buffer_, length);
-    return send_data(tx_buffer_, length);
+    return send_frame(length);
 }
 
 types::status canvas::update()

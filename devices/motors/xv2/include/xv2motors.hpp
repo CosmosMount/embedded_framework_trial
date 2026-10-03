@@ -43,8 +43,6 @@ public:
 
 private:
     types::status transmit(const xv2::frame& frame);
-    static float rad_to_deg(float rad);
-    static float rad_s_to_rpm(float rad_s);
 
     options options_{};
 };

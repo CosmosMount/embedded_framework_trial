@@ -192,7 +192,7 @@ types::status configure_filter(bus bus, uint32_t fifo) noexcept
     return types::status::ok;
 }
 
-types::status init_classic(bus bus)
+types::status start_controller(bus bus)
 {
     const bus_config* cfg = config_of(static_cast<uint8_t>(bus));
     if (cfg == nullptr)
@@ -229,49 +229,15 @@ types::status init_classic(bus bus)
     {
         return types::status::error;
     }
-    if (HAL_FDCAN_Start(handle) != HAL_OK)
+    // TDC is specific to the configured FD data phase, not Classic CAN.
+    // Configure while READY, then enable before starting the controller.
+    if (cfg->type == bus_type::fd && cfg->tdc_enabled)
     {
-        return types::status::error;
-    }
-    return types::status::ok;
-}
-
-types::status init_fd(bus bus)
-{
-    const bus_config* cfg = config_of(static_cast<uint8_t>(bus));
-    if (cfg == nullptr)
-    {
-        return types::status::not_configured;
-    }
-    FDCAN_HandleTypeDef* handle = handle_of(bus);
-    if (handle == nullptr)
-    {
-        return types::status::invalid_arg;
-    }
-
-    uint32_t fifo = FDCAN_RX_FIFO0;
-    types::status status = configured_rx_fifo(handle, fifo);
-    if (status != types::status::ok)
-    {
-        return status;
-    }
-
-    uint32_t notification = (fifo == FDCAN_RX_FIFO1 ? FDCAN_IT_RX_FIFO1_NEW_MESSAGE
-                                                     : FDCAN_IT_RX_FIFO0_NEW_MESSAGE) |
-                            FDCAN_IT_ERROR_WARNING |
-                            FDCAN_IT_ERROR_PASSIVE |
-                            FDCAN_IT_ARB_PROTOCOL_ERROR |
-                            FDCAN_IT_DATA_PROTOCOL_ERROR |
-                            FDCAN_IT_BUS_OFF;
-
-    status = configure_filter(bus, fifo);
-    if (status != types::status::ok)
-    {
-        return status;
-    }
-    if (HAL_FDCAN_ActivateNotification(handle, notification, 0U) != HAL_OK)
-    {
-        return types::status::error;
+        if (HAL_FDCAN_ConfigTxDelayCompensation(handle, cfg->tdc_offset, cfg->tdc_filter) != HAL_OK ||
+            HAL_FDCAN_EnableTxDelayCompensation(handle) != HAL_OK)
+        {
+            return types::status::error;
+        }
     }
     if (HAL_FDCAN_Start(handle) != HAL_OK)
     {
@@ -292,6 +258,23 @@ types::status transmit_frame(bus bus,
         return types::status::invalid_arg;
     }
 
+    uint8_t capacity = 0;
+    switch (handle->Init.TxElmtSize)
+    {
+    case FDCAN_DATA_BYTES_8: capacity = 8; break;
+    case FDCAN_DATA_BYTES_12: capacity = 12; break;
+    case FDCAN_DATA_BYTES_16: capacity = 16; break;
+    case FDCAN_DATA_BYTES_20: capacity = 20; break;
+    case FDCAN_DATA_BYTES_24: capacity = 24; break;
+    case FDCAN_DATA_BYTES_32: capacity = 32; break;
+    case FDCAN_DATA_BYTES_48: capacity = 48; break;
+    case FDCAN_DATA_BYTES_64: capacity = 64; break;
+    default: return types::status::not_configured;
+    }
+    const uint32_t dlc = len_to_dlc(len);
+    // FD lengths are rounded up to a legal DLC; the whole wire payload must fit.
+    if (dlc_to_len(dlc) > capacity) return types::status::invalid_arg;
+
     FDCAN_TxHeaderTypeDef tx_header{};
     const bus_config* cfg = config_of(static_cast<uint8_t>(bus));
     if (cfg == nullptr)
@@ -302,7 +285,7 @@ types::status transmit_frame(bus bus,
     tx_header.IdType = cfg->filter_id_type == id_type::extended ? FDCAN_EXTENDED_ID
                                                                 : FDCAN_STANDARD_ID;
     tx_header.TxFrameType = FDCAN_DATA_FRAME;
-    tx_header.DataLength = len_to_dlc(len);
+    tx_header.DataLength = dlc;
     tx_header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
     tx_header.BitRateSwitch = fd_format == FDCAN_FD_CAN &&
                                       cfg->capability == bus_capability::fd_brs
@@ -413,14 +396,7 @@ types::status init(bus bus)
         return status;
     }
 
-    if (cfg->type == bus_type::classic)
-    {
-        status = init_classic(bus);
-    }
-    else
-    {
-        status = init_fd(bus);
-    }
+    status = start_controller(bus);
 
     if (status != types::status::ok)
     {

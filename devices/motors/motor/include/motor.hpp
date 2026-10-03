@@ -42,8 +42,8 @@ struct command
 
 struct feedback
 {
-    float position = 0.0f;
-    float velocity = 0.0f;
+    float position = 0.0f; // rad
+    float velocity = 0.0f; // rad/s
     float torque = 0.0f;
     float current = 0.0f;
     float temperature = 0.0f;

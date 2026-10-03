@@ -50,7 +50,6 @@ public:
 
 private:
     static void poll_thread_entry(ULONG arg);
-    types::status poll_once(gamepad_state& message);
 
     TX_THREAD thread_{};
     alignas(8) uint8_t stack_[768]{};

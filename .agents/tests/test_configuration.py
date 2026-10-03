@@ -31,7 +31,7 @@ class ConfigurationTests(unittest.TestCase):
                 output = self.root / "build" / board
                 result = self.cmake("configure.cmake", board, f"-DOUT_DIR={output}")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                for name in ("config.hpp", "robot_config.hpp", "module_bindings.hpp", "bsp_bindings.cpp", "cubemx.script"):
+                for name in ("config.hpp", "robot_config.hpp", "bsp_bindings.cpp", "cubemx.script"):
                     self.assertGreater((output / name).stat().st_size, 0)
                 result = self.cmake("export_editor_context.cmake", board, f"-DPNX_EDITOR_OUTPUT={output}/editor.json")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -72,6 +72,40 @@ class ConfigurationTests(unittest.TestCase):
                 result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/unsupported")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(key, result.stdout + result.stderr)
+
+    def test_xv2_existing_models_are_selectable(self):
+        for board in self.boards:
+            path = self.root / "configs/boards" / board / "robot.json"
+            robot = json.loads(path.read_text())
+            bus = "fdcan2" if board == "h723_dmmc02" else "can1"
+            for model in ("xv2_x42", "xv2_y42"):
+                with self.subTest(board=board, model=model):
+                    robot["devices"]["motors"]["list"] = [{
+                        "name": "axis", "model": model, "can_bus": bus,
+                        "can_type": "classic", "can_id": "0x100"}]
+                    path.write_text(json.dumps(robot))
+                    result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/xv2")
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_fdcan_tdc_configuration(self):
+        board = "h723_dmmc02"
+        path = self.root / "configs/boards" / board / "params.json"
+        original = json.loads(path.read_text())
+        for bus, offset, window in (("fdcan1", -1, 13), ("fdcan1", 128, 13),
+                                    ("fdcan1", 13, 1.5), ("fdcan1", "13", 13),
+                                    ("fdcan2", 13, 13)):
+            with self.subTest(bus=bus, offset=offset, window=window):
+                params = json.loads(json.dumps(original))
+                params["can"][bus].update(tdc_offset=offset, tdc_filter=window)
+                path.write_text(json.dumps(params))
+                result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/tdc")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("TDC" if bus == "fdcan2" else "tdc_", result.stdout + result.stderr)
+        params = json.loads(json.dumps(original))
+        del params["can"]["fdcan1"]["tdc_filter"]
+        path.write_text(json.dumps(params))
+        result = self.cmake("configure.cmake", board, "-DOUT_DIR=build/tdc")
+        self.assertNotEqual(result.returncode, 0)
 
     def test_numeric_parameter_contracts(self):
         board = "h723_dmmc02"
