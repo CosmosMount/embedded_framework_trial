@@ -50,6 +50,82 @@ bool supports_dma(bus bus_id, bool receive) noexcept
     return receive ? binding.has_rx_dma : binding.has_tx_dma;
 }
 
+#if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+bool cache_range(bsp::dma::buffer_view buffer, uintptr_t& aligned_start,
+                 uintptr_t& aligned_end) noexcept
+{
+    if (!bsp::dma::valid(buffer) || buffer.logical_size() > buffer.capacity())
+    {
+        return false;
+    }
+
+    const uintptr_t start = reinterpret_cast<uintptr_t>(buffer.data());
+    if (start > std::numeric_limits<uintptr_t>::max() - buffer.logical_size())
+    {
+        return false;
+    }
+    const uintptr_t end = start + buffer.logical_size();
+    if (end > std::numeric_limits<uintptr_t>::max() - (bsp::dma::cache_line_size - 1U))
+    {
+        return false;
+    }
+
+    aligned_start = start;
+    aligned_end = (end + bsp::dma::cache_line_size - 1U) & ~(bsp::dma::cache_line_size - 1U);
+    return aligned_end <= start + buffer.capacity();
+}
+
+#endif
+
+bool clean_tx_buffer(bsp::dma::buffer_view buffer) noexcept
+{
+#if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+    uintptr_t aligned_start = 0U;
+    uintptr_t aligned_end = 0U;
+    if (!cache_range(buffer, aligned_start, aligned_end))
+    {
+        return false;
+    }
+    SCB_CleanDCache_by_Addr(reinterpret_cast<uint32_t*>(aligned_start),
+                            static_cast<int32_t>(aligned_end - aligned_start));
+#else
+    return bsp::dma::valid(buffer);
+#endif
+    return true;
+}
+
+bool prepare_rx_buffer(bsp::dma::buffer_view buffer) noexcept
+{
+#if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+    if (!bsp::dma::valid(buffer))
+    {
+        return false;
+    }
+    SCB_InvalidateDCache_by_Addr(reinterpret_cast<uint32_t*>(buffer.data()),
+                                 static_cast<int32_t>(buffer.capacity()));
+#else
+    return bsp::dma::valid(buffer);
+#endif
+    return true;
+}
+
+bool invalidate_rx_buffer(bsp::dma::buffer_view buffer) noexcept
+{
+#if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+    uintptr_t aligned_start = 0U;
+    uintptr_t aligned_end = 0U;
+    if (!cache_range(buffer, aligned_start, aligned_end))
+    {
+        return false;
+    }
+    SCB_InvalidateDCache_by_Addr(reinterpret_cast<uint32_t*>(aligned_start),
+                                 static_cast<int32_t>(aligned_end - aligned_start));
+#else
+    return bsp::dma::valid(buffer);
+#endif
+    return true;
+}
+
 types::status begin_transfer(bus bus_id, bool receive, bool dma, SPI_HandleTypeDef*& handle,
                              transfer_context*& context) noexcept
 {
@@ -88,7 +164,7 @@ void complete_transfer(SPI_HandleTypeDef* handle, bool success) noexcept
 
     transfer_context& context = transfers[index];
     if (success && context.state.dma && context.state.receive &&
-        !bsp::dma::valid(context.dma_buffer))
+        !invalidate_rx_buffer(context.dma_buffer))
     {
         success = false;
     }
@@ -270,7 +346,7 @@ types::status transmit_dma(bus bus_id, bsp::dma::buffer_view buffer)
         return status;
     }
     context->dma_buffer = buffer;
-    if (!bsp::dma::valid(buffer) ||
+    if (!clean_tx_buffer(buffer) ||
         HAL_SPI_Transmit_DMA(handle, buffer.data(), static_cast<uint16_t>(buffer.logical_size())) != HAL_OK)
     {
         complete_transfer(handle, false);
@@ -294,7 +370,7 @@ types::status receive_dma(bus bus_id, bsp::dma::buffer_view buffer)
         return status;
     }
     context->dma_buffer = buffer;
-    if (!bsp::dma::valid(buffer) ||
+    if (!prepare_rx_buffer(buffer) ||
         HAL_SPI_Receive_DMA(handle, buffer.data(), static_cast<uint16_t>(buffer.logical_size())) != HAL_OK)
     {
         complete_transfer(handle, false);

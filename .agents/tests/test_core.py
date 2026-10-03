@@ -134,16 +134,17 @@ class CoreTests(unittest.TestCase):
 
     def test_spi_transfer_lengths(self):
         root = Path(self.temp.name).resolve()
-        for board in ("h723_dmmc02", "f407_cboard"):
-            with self.subTest(board=board):
+        for cache_present in (0, 1):
+            with self.subTest(cache_present=cache_present):
                 includes = [ROOT / ".agents/tests/host", root / "generated", ROOT / "libs/common/include",
-                            ROOT / f"bsp/{board}/spi/include", ROOT / f"bsp/{board}/spi/src",
+                            ROOT / "bsp/shared/spi/include", ROOT / "bsp/shared/spi/src",
                             ROOT / "bsp/shared/bsp/include"]
-                binary = root / f"spi_{board}.exe"
-                command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror"]
+                binary = root / f"spi_cache_{cache_present}.exe"
+                command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                           f"-D__DCACHE_PRESENT={cache_present}"]
                 command.extend(f"-I{p}" for p in includes)
                 command.extend([str(ROOT / ".agents/tests/host/test_spi.cpp"),
-                                str(ROOT / f"bsp/{board}/spi/src/bsp_spi.cpp"), "-o", str(binary)])
+                                str(ROOT / "bsp/shared/spi/src/bsp_spi.cpp"), "-o", str(binary)])
                 result = subprocess.run(command, text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 result = subprocess.run([str(binary)], text=True, capture_output=True)
