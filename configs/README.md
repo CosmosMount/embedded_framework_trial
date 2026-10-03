@@ -37,7 +37,7 @@ cmake -DPNX_BOARD=f407_cboard -DOUT_DIR=build/config-preview/f407 -P configs/cma
 cmake -DPNX_BOARD=h723_dmmc02 -DPNX_EDITOR_OUTPUT=build/config-preview/editor.json -P configs/cmake/export_editor_context.cmake
 ```
 
-每次预览生成 `config.hpp`、`robot_config.hpp`、`module_bindings.hpp`、`bsp_bindings.cpp`，另输出 `cubemx.script`。编辑器 JSON 的 IOC、board、params、robot 路径全部指向本目录。生成器是配置有效性的最终裁定者，编辑器不自行维护另一套规则。遇到错误修正源 JSON/IOC 后重新运行，不修补生成文件。
+每次预览生成 `config.hpp`、`robot_config.hpp`、`bsp_bindings.cpp`，另输出 `cubemx.script`。编辑器 JSON 的 IOC、board、params、robot 路径全部指向本目录。生成器是配置有效性的最终裁定者，编辑器不自行维护另一套规则。遇到错误修正源 JSON/IOC 后重新运行，不修补生成文件。
 
 ## 从 IOC 重新生成
 
@@ -59,6 +59,12 @@ cmake --build --preset h723-debug
 固件输出为 `build/<preset>/pnx_embedded.elf`。根工程的高级覆盖参数 `PNX_PARAMS_OVERRIDE`、`PNX_ROBOT_CONFIG_OVERRIDE` 用于显式验证，常规配置仍修改本目录；不同板型须使用不同构建目录。修改板型或工具链后使用新的构建目录，避免复用不匹配的缓存。
 
 最低版本升级源于 [CMake 3.23 的 preset include 支持](https://cmake.org/cmake/help/v3.23/manual/cmake-presets.7.html)。配置生成、固件链接、启动钩子和硬件运行是不同验收层级，当前限制见 [SPEC](../.agents/docs/SPEC.md)。
+
+## CAN FD 初始化
+
+H7 CAN FD 的发送延迟补偿通过板型 params 中 `can.<端口>.tdc_offset`、`tdc_filter` 成对配置，均为 `[0, 127]` 的硬件参数；只有 IOC 启用 CAN FD BRS 的端口允许配置。两项存在时，BSP 在启动前配置并启用 TDC，失败返回错误；两项缺省时不启用。当前 FDCAN1 配置为 `13/13`，Classic 端口不配置 TDC。接收 FIFO 依据 IOC/CubeMX 生成的实际分配选择。
+
+发送长度同时受协议和 CubeMX 配置的 `TxElmtSize` 限制：Classic 最多 8 字节；FD 的 DLC 补齐长度不得超过消息 RAM 元素容量。BSP 将 DLC 补齐部分置零，超出容量时拒绝提交，不自动扩大硬件配置。
 
 ## 独立采样与温控
 
