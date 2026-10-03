@@ -130,3 +130,17 @@ SPEC 统一新增功能复用、协议与运行职责分离及无幽灵函数规
 SPI 差异复审（基线 e14e775）：完整源码差异仅 DMA cache 维护，其余传输状态机、HAL 调用及接口一致。迁入 shared/spi，以 __DCACHE_PRESENT 保留 cache 分支，cache 范围助手也只在有 cache 时编译；无 cache 的清理/失效入口仍执行原 F407 的 dma::valid 检查。删除两板旧副本与空目录，生成绑定继续通过私有头接入。原 SPI 回归改为显式测试 cache=0/1，扩展真实 DMA 提交/回调完成、清理一次、接收前后各失效一次及对齐容量范围；HAL/cache 调用为边界替身。31 项完整回归、两板 Debug/Release 构建、四清单单份共享 SPI 及 git diff --check PASS。DESIGN 同步当前 SPI 归属；实际 DMA/cache 一致性仍 NOT_RUN，不宣称已由主机证明硬件一致性。
 
 CAN 公共契约收敛（基线 364418d）：两板 bsp_can.hpp 完全一致且只依赖生成配置、通用状态/回调和 RTOS 类型，迁入 shared/can/include，删除冗余副本及未使用的 stddef；bxCAN/FDCAN 实现和私有 HAL 绑定保持分开。迁移原 F407 HAL 回归的公共头路径，DESIGN 同步职责。H7 FDCAN/DMIMU CAN 与 F407 HAL 针对性回归 PASS，两板 Debug/Release 构建及 git diff --check PASS；全文件哈希比较未再发现完全重复的自有 C/C++ 文件，此证据不等于函数级无重复或完全无幽灵接口。未操作硬件。
+
+## 收敛验收（代码状态 d7257b4）
+
+| 用户要求 | 当前证据与状态 |
+| --- | --- |
+| 薄线程与单次工作函数规则 | gamepad 工作直接在 poll_thread_entry；温控直接在 temperature_thread_entry；SPEC 保留独立算法/生命周期边界，规则已落地 |
+| 审查绑定必要性 | PS2 module_bindings 生成层已退役；剩余 SPI/UART/PWM/ADC 私有绑定连接配置与 HAL，CAN 两板绑定承担不同 HAL 类型；公共头及共享绑定单份维护 |
+| CMSIS-DSP 编译、两套 AHRS 复用、删除 fusion_ahrs | 四个 compile_commands 均有独立 cmsis_dsp 的七个内核，两个生产 EKF 的行为回归链接这些内核；旧头及幽灵声明已删除 |
+| 更快的 inv_sqrt 方案 | 精确 sqrtf + no-math-errno，前述两板汇编确认 VSQRT/VDIV；魔数单次迭代不满足精度约束，未保留双轨；目标周期排名仍 NOT_RUN |
+| 全仓重复职责/幽灵接口审查及规范 | 102 个当前自有源码/头的声明候选复核：构造函数有定义，USB 符号由生成器提供，CMSIS/标准库调用有提供者；未发现新的确定幽灵接口。完整文件无重复；函数级审查沿既有调用链，不将正则当作完整语义证明。SPEC 统一维护规则 |
+| Classic/FD 区别 | FIFO、格式/BRS、TDC 与容量限制的 H7 生产路径回归，F407 bxCAN 回归；两板实现独立 |
+| 验证与分步提交 | 当前完整 31 项回归 PASS；四板型/构建类型的数学选项与独立 DSP 目标核验 PASS；四份入口文档本地路径及 diff 检查 PASS；改动已分步提交，未操作硬件 |
+
+结构清理目前无新的已证实候选。剩余“向量/矩阵选用哪种实现更快”的目标板周期比较缺少既有测量入口、实际输入与误差预算，已向用户询问；不能由默认链接、库名或主机时间替代。继续保留已有独立结构收益与精确方案，不宣称全目标完成或性能最优，不为了自动续轮增加无收益改动。
