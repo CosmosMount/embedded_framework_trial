@@ -138,7 +138,7 @@ class CoreTests(unittest.TestCase):
             with self.subTest(board=board):
                 includes = [ROOT / ".agents/tests/host", root / "generated", ROOT / "libs/common/include",
                             ROOT / f"bsp/{board}/spi/include", ROOT / f"bsp/{board}/spi/src",
-                            ROOT / f"bsp/{board}/bsp/include"]
+                            ROOT / "bsp/shared/bsp/include"]
                 binary = root / f"spi_{board}.exe"
                 command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror"]
                 command.extend(f"-I{p}" for p in includes)
@@ -189,13 +189,13 @@ class CoreTests(unittest.TestCase):
     def test_usart_receive_ownership(self):
         root = Path(self.temp.name).resolve()
         includes = [ROOT / ".agents/tests/host", root / "generated",
-                    ROOT / "libs/common/include", ROOT / "bsp/f407_cboard/bsp/include",
-                    ROOT / "bsp/f407_cboard/usart/include", ROOT / "bsp/f407_cboard/usart/src"]
+                    ROOT / "libs/common/include", ROOT / "bsp/shared/bsp/include",
+                    ROOT / "bsp/shared/usart/include", ROOT / "bsp/shared/usart/src"]
         binary = root / "usart.exe"
         command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror"]
         command.extend(f"-I{path}" for path in includes)
         command.extend([str(ROOT / ".agents/tests/host/test_usart.cpp"),
-                        str(ROOT / "bsp/f407_cboard/usart/src/bsp_usart.cpp"), "-o", str(binary)])
+                        str(ROOT / "bsp/shared/usart/src/bsp_usart.cpp"), "-o", str(binary)])
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         result = subprocess.run([str(binary)], text=True, capture_output=True)
