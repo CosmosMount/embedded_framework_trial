@@ -148,7 +148,6 @@ private:
     float calculate_temperature_duty(float temperature);
     float calculate_approach_duty(float temperature);
     bool valid_temperature(float temperature) const;
-    bool update_temperature();
     struct thermal_sample
     {
         float celsius = 0.0f;

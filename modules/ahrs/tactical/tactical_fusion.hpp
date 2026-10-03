@@ -5,10 +5,13 @@
 
 #pragma once
 
-#include "fusion_ahrs.hpp"
+#include "geometry.hpp"
+#include "biquad.hpp"
 
 #include <stdbool.h>
 #include <stdint.h>
+
+enum class TacticalConvention : uint8_t { nwu, enu, ned };
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,22 +30,10 @@ typedef enum {
 } TacticalImpactState;
 
 typedef struct {
-    float b0;
-    float b1;
-    float b2;
-    float a1;
-    float a2;
-    float x1;
-    float x2;
-    float y1;
-    float y2;
-} DigitalFilter;
-
-typedef struct {
-    FusionVector accMean;
-    FusionVector accVar;
-    FusionVector gyroMean;
-    FusionVector gyroVar;
+    math::vector3 accMean;
+    math::vector3 accVar;
+    math::vector3 gyroMean;
+    math::vector3 gyroVar;
     float accMagMean;
     float accMagVar;
     float gyroMagMean;
@@ -52,16 +43,16 @@ typedef struct {
 } TacticalNoiseStats;
 
 typedef struct {
-    FusionQuaternion quaternion;
-    FusionVector gyroBias;
-    FusionVector velocity;
+    math::quaternion quaternion;
+    math::vector3 gyroBias;
+    math::vector3 velocity;
     float heavePosition;
     float heaveVelocity;
 
     float P[6][6];
 
     float samplePeriod;
-    FusionConvention convention;
+    TacticalConvention convention;
     TacticalMotionState motionState;
     float accMagnitude;
 
@@ -75,7 +66,7 @@ typedef struct {
     uint8_t impactTriggerSource;      // Bit 0: acceleration, bit 1: gyroscope
 
     // Linear acceleration compensation
-    FusionVector linearAccBody;         // Estimated linear acceleration in body frame
+    math::vector3 linearAccBody;         // Estimated linear acceleration in body frame
     float linearAccMagnitude;          // Magnitude of linear acceleration
     bool isLinearMotion;              // Flag indicating linear motion detected
 
@@ -88,8 +79,8 @@ typedef struct {
     float accVarWindowAlpha;           // EMA alpha for windowed variance
     bool isPaddling;                   // Periodic vibration detected
 
-    DigitalFilter hpFilterVel;
-    DigitalFilter hpFilterPos;
+    filter::biquad hpFilterVel;
+    filter::biquad hpFilterPos;
     float verticalAccBias;
     float verticalAccFiltered;
 
@@ -147,9 +138,9 @@ typedef struct {
 } TacticalSystem;
 
 void Tactical_Init(TacticalSystem *const sys, float sampleRate, float heaveCutoffFreq);
-void Tactical_Update(TacticalSystem *const sys, FusionVector gyro, FusionVector acc);
-FusionVector Tactical_GetCalibratedGyro(const TacticalSystem *const sys, FusionVector rawGyro);
-FusionVector Tactical_GetEarthAcceleration(const TacticalSystem *const sys, FusionVector acc);
+void Tactical_Update(TacticalSystem *const sys, math::vector3 gyro, math::vector3 acc);
+math::vector3 Tactical_GetCalibratedGyro(const TacticalSystem *const sys, math::vector3 rawGyro);
+math::vector3 Tactical_GetEarthAcceleration(const TacticalSystem *const sys, math::vector3 acc);
 
 #ifdef __cplusplus
 }

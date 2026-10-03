@@ -17,18 +17,12 @@ iir::iir(float omega_n, float zeta, float dt)
 
 float iir::update(float input)
 {
-    const float output = b0_ * input + b1_ * x1_ + b0_ * x2_ + a1_ * y1_ + a2_ * y2_;
-    x2_ = x1_;
-    x1_ = input;
-    y2_ = y1_;
-    y1_ = output;
-    return output;
+    return state_.update(input, b0_, b1_, b0_, a1_, a2_);
 }
 
 void iir::reset()
 {
-    x1_ = x2_ = 0.0f;
-    y1_ = y2_ = 0.0f;
+    state_ = {};
 }
 
 } // namespace filter

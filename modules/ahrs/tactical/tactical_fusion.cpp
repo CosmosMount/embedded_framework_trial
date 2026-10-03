@@ -4,80 +4,30 @@
  */
 
 #include "tactical_fusion.hpp"
+#include "matrix.hpp"
+#include "constrain.hpp"
 #include <math.h>
 #include <string.h>
 
 #define G_CONST 9.80665f
-#define SQRT2_F 1.41421356237f
+static math::vector3 GravityBody(const math::quaternion q, const TacticalConvention convention) {
+    const float qw = q.w;
+    const float qx = q.x;
+    const float qy = q.y;
+    const float qz = q.z;
 
-static float ClampFloat(const float value, const float minValue, const float maxValue) {
-    if (value < minValue) return minValue;
-    if (value > maxValue) return maxValue;
-    return value;
-}
-
-static void DigitalFilterInitHighPass(DigitalFilter *const filter, const float cutoffHz, const float sampleRate) {
-    if (filter == NULL) {
-        return;
-    }
-
-    filter->x1 = 0.0f;
-    filter->x2 = 0.0f;
-    filter->y1 = 0.0f;
-    filter->y2 = 0.0f;
-
-    if ((cutoffHz <= 0.0f) || (sampleRate <= 0.0f)) {
-        filter->b0 = 1.0f;
-        filter->b1 = 0.0f;
-        filter->b2 = 0.0f;
-        filter->a1 = 0.0f;
-        filter->a2 = 0.0f;
-        return;
-    }
-
-    const float k = tanf((float) M_PI * cutoffHz / sampleRate);
-    const float norm = 1.0f / (1.0f + SQRT2_F * k + k * k);
-
-    filter->b0 = 1.0f * norm;
-    filter->b1 = -2.0f * norm;
-    filter->b2 = 1.0f * norm;
-    filter->a1 = 2.0f * (k * k - 1.0f) * norm;
-    filter->a2 = (1.0f - SQRT2_F * k + k * k) * norm;
-}
-
-static float DigitalFilterApply(DigitalFilter *const filter, const float input) {
-    const float output = filter->b0 * input +
-                         filter->b1 * filter->x1 +
-                         filter->b2 * filter->x2 -
-                         filter->a1 * filter->y1 -
-                         filter->a2 * filter->y2;
-
-    filter->x2 = filter->x1;
-    filter->x1 = input;
-    filter->y2 = filter->y1;
-    filter->y1 = output;
-
-    return output;
-}
-
-static FusionVector GravityBody(const FusionQuaternion q, const FusionConvention convention) {
-    const float qw = q.element.w;
-    const float qx = q.element.x;
-    const float qy = q.element.y;
-    const float qz = q.element.z;
-
-    FusionVector halfGravity;
-    if (convention == FusionConventionNed) {
-        halfGravity.axis.x = qw * qy - qx * qz;
-        halfGravity.axis.y = -(qy * qz + qw * qx);
-        halfGravity.axis.z = 0.5f - qw * qw - qz * qz;
+    math::vector3 halfGravity;
+    if (convention == TacticalConvention::ned) {
+        halfGravity.x = qw * qy - qx * qz;
+        halfGravity.y = -(qy * qz + qw * qx);
+        halfGravity.z = 0.5f - qw * qw - qz * qz;
     } else {
-        halfGravity.axis.x = qx * qz - qw * qy;
-        halfGravity.axis.y = qy * qz + qw * qx;
-        halfGravity.axis.z = qw * qw - 0.5f + qz * qz;
+        halfGravity.x = qx * qz - qw * qy;
+        halfGravity.y = qy * qz + qw * qx;
+        halfGravity.z = qw * qw - 0.5f + qz * qz;
     }
 
-    return FusionVectorMultiplyScalar(halfGravity, 2.0f);
+    return math::scale(halfGravity, 2.0f);
 }
 
 static void UpdateMeanVar(const float value, const float alpha, float *const mean, float *const var) {
@@ -86,34 +36,34 @@ static void UpdateMeanVar(const float value, const float alpha, float *const mea
     *var += alpha * (delta * delta - *var);
 }
 
-static void UpdateNoiseStats(TacticalSystem *const sys, const FusionVector acc, const FusionVector gyro, const float dt) {
+static void UpdateNoiseStats(TacticalSystem *const sys, const math::vector3 acc, const math::vector3 gyro, const float dt) {
     const float tau = sys->params.noiseTau;
     const float alpha = (tau <= 0.0f) ? 1.0f : (dt / (tau + dt));
 
-    UpdateMeanVar(acc.axis.x, alpha, &sys->noise.accMean.axis.x, &sys->noise.accVar.axis.x);
-    UpdateMeanVar(acc.axis.y, alpha, &sys->noise.accMean.axis.y, &sys->noise.accVar.axis.y);
-    UpdateMeanVar(acc.axis.z, alpha, &sys->noise.accMean.axis.z, &sys->noise.accVar.axis.z);
+    UpdateMeanVar(acc.x, alpha, &sys->noise.accMean.x, &sys->noise.accVar.x);
+    UpdateMeanVar(acc.y, alpha, &sys->noise.accMean.y, &sys->noise.accVar.y);
+    UpdateMeanVar(acc.z, alpha, &sys->noise.accMean.z, &sys->noise.accVar.z);
 
-    UpdateMeanVar(gyro.axis.x, alpha, &sys->noise.gyroMean.axis.x, &sys->noise.gyroVar.axis.x);
-    UpdateMeanVar(gyro.axis.y, alpha, &sys->noise.gyroMean.axis.y, &sys->noise.gyroVar.axis.y);
-    UpdateMeanVar(gyro.axis.z, alpha, &sys->noise.gyroMean.axis.z, &sys->noise.gyroVar.axis.z);
+    UpdateMeanVar(gyro.x, alpha, &sys->noise.gyroMean.x, &sys->noise.gyroVar.x);
+    UpdateMeanVar(gyro.y, alpha, &sys->noise.gyroMean.y, &sys->noise.gyroVar.y);
+    UpdateMeanVar(gyro.z, alpha, &sys->noise.gyroMean.z, &sys->noise.gyroVar.z);
 
-    const float accMag = FusionVectorMagnitude(acc);
-    const float gyroMag = FusionVectorMagnitude(gyro);
+    const float accMag = math::magnitude(acc);
+    const float gyroMag = math::magnitude(gyro);
 
     UpdateMeanVar(accMag, alpha, &sys->noise.accMagMean, &sys->noise.accMagVar);
     UpdateMeanVar(gyroMag, alpha, &sys->noise.gyroMagMean, &sys->noise.gyroMagVar);
 
-    const float accVarMag = sys->noise.accVar.axis.x + sys->noise.accVar.axis.y + sys->noise.accVar.axis.z;
-    const float gyroVarMag = sys->noise.gyroVar.axis.x + sys->noise.gyroVar.axis.y + sys->noise.gyroVar.axis.z;
+    const float accVarMag = sys->noise.accVar.x + sys->noise.accVar.y + sys->noise.accVar.z;
+    const float gyroVarMag = sys->noise.gyroVar.x + sys->noise.gyroVar.y + sys->noise.gyroVar.z;
 
     sys->noise.accNoise = sqrtf(fmaxf(accVarMag, 0.0f));
     sys->noise.gyroNoise = sqrtf(fmaxf(gyroVarMag, 0.0f));
 }
 
-static TacticalMotionState AnalyzeMotion(TacticalSystem *const sys, const FusionVector acc, const FusionVector gyro) {
-    const float accMag = FusionVectorMagnitude(acc);
-    const float gyroMag = FusionVectorMagnitude(gyro);
+static TacticalMotionState AnalyzeMotion(TacticalSystem *const sys, const math::vector3 acc, const math::vector3 gyro) {
+    const float accMag = math::magnitude(acc);
+    const float gyroMag = math::magnitude(gyro);
     const float accErr = fabsf(accMag - 1.0f);
 
     if ((accErr < sys->params.accStaticThreshold) &&
@@ -131,33 +81,6 @@ static TacticalMotionState AnalyzeMotion(TacticalSystem *const sys, const Fusion
     return TACTICAL_MOTION_DYNAMIC;
 }
 
-static bool Mat3Inverse(const float m[3][3], float inv[3][3]) {
-    const float det =
-        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
-        m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
-        m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-
-    if (fabsf(det) < 1e-9f) {
-        return false;
-    }
-
-    const float invDet = 1.0f / det;
-
-    inv[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * invDet;
-    inv[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * invDet;
-    inv[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * invDet;
-
-    inv[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * invDet;
-    inv[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * invDet;
-    inv[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * invDet;
-
-    inv[2][0] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * invDet;
-    inv[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * invDet;
-    inv[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * invDet;
-
-    return true;
-}
-
 static void ComputeAdaptiveNoise(const TacticalSystem *const sys, const float accError, float *const qAngle,
                                  float *const qBias, float *const rAcc) {
     float accNoise = sys->noise.accNoise;
@@ -170,7 +93,7 @@ static void ComputeAdaptiveNoise(const TacticalSystem *const sys, const float ac
         gyroNoise = 0.05f;
     }
 
-    const float gyroNoiseRad = FusionDegreesToRadians(gyroNoise);
+    const float gyroNoiseRad = math::degrees_to_radians(gyroNoise);
     const float gyroNoiseVar = gyroNoiseRad * gyroNoiseRad;
     const float accNoiseVar = accNoise * accNoise;
 
@@ -185,32 +108,32 @@ static void ComputeAdaptiveNoise(const TacticalSystem *const sys, const float ac
         rAccLocal *= 12.0f;
     }
 
-    qAngleLocal = ClampFloat(qAngleLocal, 1e-9f, 1.0f);
-    qBiasLocal = ClampFloat(qBiasLocal, 1e-12f, 1.0f);
-    rAccLocal = ClampFloat(rAccLocal, 1e-6f, 1.0f);
+    qAngleLocal = math::clamp(qAngleLocal, 1e-9f, 1.0f);
+    qBiasLocal = math::clamp(qBiasLocal, 1e-12f, 1.0f);
+    rAccLocal = math::clamp(rAccLocal, 1e-6f, 1.0f);
 
     *qAngle = qAngleLocal;
     *qBias = qBiasLocal;
     *rAcc = rAccLocal;
 }
 
-static void EkfPredict(TacticalSystem *const sys, const FusionVector gyro, const float dt) {
-    const FusionVector gyroCorrected = FusionVectorSubtract(gyro, sys->gyroBias);
-    const FusionVector omega = FusionVectorMultiplyScalar(gyroCorrected, FusionDegreesToRadians(1.0f));
+static void EkfPredict(TacticalSystem *const sys, const math::vector3 gyro, const float dt) {
+    const math::vector3 gyroCorrected = math::subtract(gyro, sys->gyroBias);
+    const math::vector3 omega = math::scale(gyroCorrected, math::degrees_to_radians(1.0f));
 
-    const FusionVector delta = FusionVectorMultiplyScalar(omega, 0.5f * dt);
-    sys->quaternion = FusionQuaternionAdd(sys->quaternion,
-                                          FusionQuaternionMultiplyVector(sys->quaternion, delta));
-    sys->quaternion = FusionQuaternionNormalise(sys->quaternion);
+    const math::vector3 delta = math::scale(omega, 0.5f * dt);
+    sys->quaternion = math::add(sys->quaternion,
+                                math::multiply(sys->quaternion, delta));
+    sys->quaternion = math::normalise(sys->quaternion);
 
     float F[6][6] = {0};
     for (int i = 0; i < 6; ++i) {
         F[i][i] = 1.0f;
     }
 
-    const float wx = omega.axis.x;
-    const float wy = omega.axis.y;
-    const float wz = omega.axis.z;
+    const float wx = omega.x;
+    const float wy = omega.y;
+    const float wz = omega.z;
 
     const float skew[3][3] = {
         {0.0f, -wz, wy},
@@ -231,33 +154,11 @@ static void EkfPredict(TacticalSystem *const sys, const FusionVector gyro, const
     float rAccUnused = 0.0f;
     ComputeAdaptiveNoise(sys, accError, &qAngle, &qBias, &rAccUnused);
 
-    float FP[6][6] = {0};
-    for (int i = 0; i < 6; ++i) {
-        for (int j = 0; j < 6; ++j) {
-            float sum = 0.0f;
-            for (int k = 0; k < 6; ++k) {
-                sum += F[i][k] * sys->P[k][j];
-            }
-            FP[i][j] = sum;
-        }
-    }
-
-    float FPFt[6][6] = {0};
-    for (int i = 0; i < 6; ++i) {
-        for (int j = 0; j < 6; ++j) {
-            float sum = 0.0f;
-            for (int k = 0; k < 6; ++k) {
-                sum += FP[i][k] * F[j][k];
-            }
-            FPFt[i][j] = sum;
-        }
-    }
-
-    for (int i = 0; i < 6; ++i) {
-        for (int j = 0; j < 6; ++j) {
-            sys->P[i][j] = FPFt[i][j];
-        }
-    }
+    float FP[6][6]{};
+    float Ft[6][6]{};
+    math::multiply(F, sys->P, FP);
+    math::transpose(F, Ft);
+    math::multiply(FP, Ft, sys->P);
 
     for (int i = 0; i < 3; ++i) {
         sys->P[i][i] += qAngle * dt;
@@ -267,21 +168,21 @@ static void EkfPredict(TacticalSystem *const sys, const FusionVector gyro, const
     }
 }
 
-static void EkfUpdateAccel(TacticalSystem *const sys, const FusionVector acc) {
-    const float accMagSq = FusionVectorMagnitudeSquared(acc);
+static void EkfUpdateAccel(TacticalSystem *const sys, const math::vector3 acc) {
+    const float accMagSq = math::magnitude_squared(acc);
     if (accMagSq < 1e-6f) {
         return;
     }
 
     const float accMag = sqrtf(accMagSq);
-    FusionVector accNorm = FusionVectorMultiplyScalar(acc, 1.0f / accMag);
+    math::vector3 accNorm = math::scale(acc, 1.0f / accMag);
 
-    FusionVector gravity = GravityBody(sys->quaternion, sys->convention);
-    if (FusionVectorMagnitudeSquared(gravity) > 0.0f) {
-        gravity = FusionVectorNormalise(gravity);
+    math::vector3 gravity = GravityBody(sys->quaternion, sys->convention);
+    if (math::magnitude_squared(gravity) > 0.0f) {
+        gravity = math::normalise(gravity);
     }
 
-    const FusionVector error = FusionVectorCrossProduct(accNorm, gravity);
+    const math::vector3 error = math::cross(accNorm, gravity);
 
     const float accError = fabsf(sys->accMagnitude - 1.0f);
     float qAngle = 0.0f;
@@ -314,48 +215,38 @@ static void EkfUpdateAccel(TacticalSystem *const sys, const FusionVector acc) {
     }
 
     float SInv[3][3];
-    if (!Mat3Inverse(S, SInv)) {
+    if (!math::inverse(S, SInv, 1e-9f)) {
         return;
     }
 
     float K1[3][3] = {0};
     float K2[3][3] = {0};
 
-    for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 3; ++c) {
-            float sum1 = 0.0f;
-            float sum2 = 0.0f;
-            for (int k = 0; k < 3; ++k) {
-                sum1 += P11[r][k] * SInv[k][c];
-                sum2 += P21[r][k] * SInv[k][c];
-            }
-            K1[r][c] = sum1;
-            K2[r][c] = sum2;
-        }
-    }
+    math::multiply(P11, SInv, K1);
+    math::multiply(P21, SInv, K2);
 
-    FusionVector deltaTheta;
-    deltaTheta.axis.x = K1[0][0] * error.axis.x + K1[0][1] * error.axis.y + K1[0][2] * error.axis.z;
-    deltaTheta.axis.y = K1[1][0] * error.axis.x + K1[1][1] * error.axis.y + K1[1][2] * error.axis.z;
-    deltaTheta.axis.z = K1[2][0] * error.axis.x + K1[2][1] * error.axis.y + K1[2][2] * error.axis.z;
+    math::vector3 deltaTheta;
+    deltaTheta.x = K1[0][0] * error.x + K1[0][1] * error.y + K1[0][2] * error.z;
+    deltaTheta.y = K1[1][0] * error.x + K1[1][1] * error.y + K1[1][2] * error.z;
+    deltaTheta.z = K1[2][0] * error.x + K1[2][1] * error.y + K1[2][2] * error.z;
 
-    FusionVector deltaBias;
-    deltaBias.axis.x = K2[0][0] * error.axis.x + K2[0][1] * error.axis.y + K2[0][2] * error.axis.z;
-    deltaBias.axis.y = K2[1][0] * error.axis.x + K2[1][1] * error.axis.y + K2[1][2] * error.axis.z;
-    deltaBias.axis.z = K2[2][0] * error.axis.x + K2[2][1] * error.axis.y + K2[2][2] * error.axis.z;
+    math::vector3 deltaBias;
+    deltaBias.x = K2[0][0] * error.x + K2[0][1] * error.y + K2[0][2] * error.z;
+    deltaBias.y = K2[1][0] * error.x + K2[1][1] * error.y + K2[1][2] * error.z;
+    deltaBias.z = K2[2][0] * error.x + K2[2][1] * error.y + K2[2][2] * error.z;
 
     // A six-axis accelerometer update has no yaw observability.  Z-axis
     // gyro offset is calibrated by BMI088 at startup and must not be driven
     // by this roll/pitch-only measurement.
-    deltaBias.axis.z = 0.0f;
+    deltaBias.z = 0.0f;
 
-    const FusionVector correction = FusionVectorMultiplyScalar(deltaTheta, 0.5f);
-    sys->quaternion = FusionQuaternionAdd(sys->quaternion,
-                                          FusionQuaternionMultiplyVector(sys->quaternion, correction));
-    sys->quaternion = FusionQuaternionNormalise(sys->quaternion);
+    const math::vector3 correction = math::scale(deltaTheta, 0.5f);
+    sys->quaternion = math::add(sys->quaternion,
+                                math::multiply(sys->quaternion, correction));
+    sys->quaternion = math::normalise(sys->quaternion);
 
-    const FusionVector deltaBiasDeg = FusionVectorMultiplyScalar(deltaBias, FusionRadiansToDegrees(1.0f));
-    sys->gyroBias = FusionVectorAdd(sys->gyroBias, deltaBiasDeg);
+    const math::vector3 deltaBiasDeg = math::scale(deltaBias, math::radians_to_degrees(1.0f));
+    sys->gyroBias = math::add(sys->gyroBias, deltaBiasDeg);
 
     float K[6][3] = {0};
     for (int r = 0; r < 3; ++r) {
@@ -376,38 +267,17 @@ static void EkfUpdateAccel(TacticalSystem *const sys, const FusionVector acc) {
         }
     }
 
-    float temp[6][6] = {0};
-    for (int i = 0; i < 6; ++i) {
-        for (int j = 0; j < 6; ++j) {
-            float sum = 0.0f;
-            for (int k = 0; k < 6; ++k) {
-                sum += I_KH[i][k] * sys->P[k][j];
-            }
-            temp[i][j] = sum;
-        }
-    }
+    float temp[6][6]{};
+    float I_KHt[6][6]{};
+    float Pnew[6][6]{};
+    math::multiply(I_KH, sys->P, temp);
+    math::transpose(I_KH, I_KHt);
+    math::multiply(temp, I_KHt, Pnew);
 
-    float Pnew[6][6] = {0};
-    for (int i = 0; i < 6; ++i) {
-        for (int j = 0; j < 6; ++j) {
-            float sum = 0.0f;
-            for (int k = 0; k < 6; ++k) {
-                sum += temp[i][k] * I_KH[j][k];
-            }
-            Pnew[i][j] = sum;
-        }
-    }
-
-    float KKt[6][6] = {0};
-    for (int i = 0; i < 6; ++i) {
-        for (int j = 0; j < 6; ++j) {
-            float sum = 0.0f;
-            for (int k = 0; k < 3; ++k) {
-                sum += K[i][k] * K[j][k];
-            }
-            KKt[i][j] = sum;
-        }
-    }
+    float Kt[3][6]{};
+    float KKt[6][6]{};
+    math::transpose(K, Kt);
+    math::multiply(K, Kt, KKt);
 
     for (int i = 0; i < 6; ++i) {
         for (int j = 0; j < 6; ++j) {
@@ -426,25 +296,25 @@ static void EkfUpdateAccel(TacticalSystem *const sys, const FusionVector acc) {
 }
 
 void Tactical_Init(TacticalSystem *const sys, const float sampleRate, const float heaveCutoffFreq) {
-    memset(sys, 0, sizeof(TacticalSystem));
+    *sys = {};
 
     sys->samplePeriod = (sampleRate > 0.0f) ? (1.0f / sampleRate) : 0.0f;
-    sys->convention = FusionConventionNwu;
-    sys->quaternion = FUSION_IDENTITY_QUATERNION;
+    sys->convention = TacticalConvention::nwu;
+    sys->quaternion = math::quaternion{};
     sys->motionState = TACTICAL_MOTION_STATIC;
 
     // [FIX] Initialize noise statistics with reasonable initial values to avoid
     // large variance spike on first update (fixes static motion misdetection)
     // Initialize means to expected values (1g for acc, 0 for gyro)
-    sys->noise.accMean = (FusionVector){.axis = {0.0f, 0.0f, 1.0f}};
-    sys->noise.gyroMean = FUSION_VECTOR_ZERO;
+    sys->noise.accMean = math::vector3{0.0f, 0.0f, 1.0f};
+    sys->noise.gyroMean = math::vector3{};
     sys->noise.accMagMean = 1.0f;
     sys->noise.gyroMagMean = 0.0f;
     // Initialize variances with expected sensor noise levels
     const float expectedAccNoise = 0.01f;  // Expected accelerometer noise (g)
     const float expectedGyroNoise = 0.5f;  // Expected gyroscope noise (deg/s)
-    sys->noise.accVar = (FusionVector){.axis = {expectedAccNoise*expectedAccNoise, expectedAccNoise*expectedAccNoise, expectedAccNoise*expectedAccNoise}};
-    sys->noise.gyroVar = (FusionVector){.axis = {expectedGyroNoise*expectedGyroNoise, expectedGyroNoise*expectedGyroNoise, expectedGyroNoise*expectedGyroNoise}};
+    sys->noise.accVar = math::vector3{expectedAccNoise*expectedAccNoise, expectedAccNoise*expectedAccNoise, expectedAccNoise*expectedAccNoise};
+    sys->noise.gyroVar = math::vector3{expectedGyroNoise*expectedGyroNoise, expectedGyroNoise*expectedGyroNoise, expectedGyroNoise*expectedGyroNoise};
     sys->noise.accMagVar = expectedAccNoise * expectedAccNoise;
     sys->noise.gyroMagVar = 0.01f;  // Smaller initial variance for gyro to pass static detection
 
@@ -496,7 +366,7 @@ void Tactical_Init(TacticalSystem *const sys, const float sampleRate, const floa
     sys->params.sustainedLinearAlpha = 0.05f;     // Slow decay for sustained detection
 
     // Initialize linear acceleration estimation
-    sys->linearAccBody = FUSION_VECTOR_ZERO;
+    sys->linearAccBody = math::vector3{};
     sys->linearAccMagnitude = 0.0f;
     sys->isLinearMotion = false;
 
@@ -529,29 +399,29 @@ void Tactical_Init(TacticalSystem *const sys, const float sampleRate, const floa
     sys->P[4][4] = 1.0e-2f;
     sys->P[5][5] = 1.0e-2f;
 
-    DigitalFilterInitHighPass(&sys->hpFilterVel, heaveCutoffFreq, sampleRate);
-    DigitalFilterInitHighPass(&sys->hpFilterPos, heaveCutoffFreq, sampleRate);
+    sys->hpFilterVel = filter::biquad::high_pass(heaveCutoffFreq, sampleRate);
+    sys->hpFilterPos = filter::biquad::high_pass(heaveCutoffFreq, sampleRate);
 }
 
-FusionVector Tactical_GetCalibratedGyro(const TacticalSystem *const sys, const FusionVector rawGyro) {
-    return FusionVectorSubtract(rawGyro, sys->gyroBias);
+math::vector3 Tactical_GetCalibratedGyro(const TacticalSystem *const sys, const math::vector3 rawGyro) {
+    return math::subtract(rawGyro, sys->gyroBias);
 }
 
-void Tactical_Update(TacticalSystem *const sys, const FusionVector gyro, const FusionVector acc) {
+void Tactical_Update(TacticalSystem *const sys, const math::vector3 gyro, const math::vector3 acc) {
     const float dt = sys->samplePeriod;
     if (dt <= 0.0f) {
         return;
     }
 
-    const FusionVector calibGyro = Tactical_GetCalibratedGyro(sys, gyro);
+    const math::vector3 calibGyro = Tactical_GetCalibratedGyro(sys, gyro);
 
-    sys->accMagnitude = FusionVectorMagnitude(acc);
+    sys->accMagnitude = math::magnitude(acc);
     UpdateNoiseStats(sys, acc, calibGyro, dt);
     sys->motionState = AnalyzeMotion(sys, acc, calibGyro);
 
     // ===== IMPACT DETECTION AND RECOVERY =====
     const float accMag = sys->accMagnitude;
-    const float gyroMag = FusionVectorMagnitude(calibGyro);
+    const float gyroMag = math::magnitude(calibGyro);
     
     // Calculate rate of change
     const float accDelta = fabsf(accMag - sys->params.prevAccMag);
@@ -619,19 +489,19 @@ void Tactical_Update(TacticalSystem *const sys, const FusionVector gyro, const F
         // --- Mechanism 1: Direction-based detection ---
         // Use gyro-predicted gravity to detect when accel direction is wrong,
         // even if magnitude is ~1g (catches centripetal / constant-velocity turns).
-        const FusionVector gravPredicted = GravityBody(sys->quaternion, sys->convention);
-        const float gravMagSq = FusionVectorMagnitudeSquared(gravPredicted);
-        const float accMagSqDir = FusionVectorMagnitudeSquared(acc);
+        const math::vector3 gravPredicted = GravityBody(sys->quaternion, sys->convention);
+        const float gravMagSq = math::magnitude_squared(gravPredicted);
+        const float accMagSqDir = math::magnitude_squared(acc);
 
         if ((gravMagSq > 1e-6f) && (accMagSqDir > 1e-6f)) {
-            const FusionVector gravNorm = FusionVectorMultiplyScalar(gravPredicted,
-                FusionFastInverseSqrt(gravMagSq));
-            const FusionVector accNormDir = FusionVectorMultiplyScalar(acc,
-                FusionFastInverseSqrt(accMagSqDir));
+            const math::vector3 gravNorm = math::scale(gravPredicted,
+                math::inv_sqrt(gravMagSq));
+            const math::vector3 accNormDir = math::scale(acc,
+                math::inv_sqrt(accMagSqDir));
 
             // cos(angle) = dot(accNorm, gravNorm)
-            const float cosAngle = ClampFloat(
-                FusionVectorDotProduct(accNormDir, gravNorm), -1.0f, 1.0f);
+            const float cosAngle = math::clamp(
+                math::dot(accNormDir, gravNorm), -1.0f, 1.0f);
 
             // Use 1 - cos as a cheap proxy for angle^2/2 (avoids acosf)
             sys->accDirectionError = 1.0f - cosAngle;
@@ -672,10 +542,10 @@ void Tactical_Update(TacticalSystem *const sys, const FusionVector gyro, const F
         // Use gyro-predicted gravity direction to estimate linear acceleration.
         // Don't rely on fixed decay — use the actual measured residual.
         {
-            const FusionVector gravBody = GravityBody(sys->quaternion, sys->convention);
+            const math::vector3 gravBody = GravityBody(sys->quaternion, sys->convention);
             // linear_acc = measured_acc - predicted_gravity
-            sys->linearAccBody = FusionVectorSubtract(acc, gravBody);
-            const float residualMag = FusionVectorMagnitude(sys->linearAccBody);
+            sys->linearAccBody = math::subtract(acc, gravBody);
+            const float residualMag = math::magnitude(sys->linearAccBody);
 
             // EMA of residual for smooth sustained detection
             const float salpha = sys->params.sustainedLinearAlpha;
@@ -704,60 +574,60 @@ void Tactical_Update(TacticalSystem *const sys, const FusionVector gyro, const F
     if (sys->motionState == TACTICAL_MOTION_STATIC) {
         const float biasUncertainty = sys->P[3][3] + sys->P[4][4] + sys->P[5][5];
         if (biasUncertainty > 1.0e-3f) {
-            const float alpha = ClampFloat(sys->params.gyroBiasAlpha, 0.0f, 1.0f);
-            sys->gyroBias.axis.x += (gyro.axis.x - sys->gyroBias.axis.x) * alpha;
-            sys->gyroBias.axis.y += (gyro.axis.y - sys->gyroBias.axis.y) * alpha;
+            const float alpha = math::clamp(sys->params.gyroBiasAlpha, 0.0f, 1.0f);
+            sys->gyroBias.x += (gyro.x - sys->gyroBias.x) * alpha;
+            sys->gyroBias.y += (gyro.y - sys->gyroBias.y) * alpha;
         }
     }
 
-    FusionVector earthAcc = Tactical_GetEarthAcceleration(sys, acc);
-    float verticalAcc = earthAcc.axis.z;
+    math::vector3 earthAcc = Tactical_GetEarthAcceleration(sys, acc);
+    float verticalAcc = earthAcc.z;
 
     if (sys->motionState != TACTICAL_MOTION_DYNAMIC) {
-        const float beta = ClampFloat(sys->params.verticalBiasAlpha, 0.0f, 1.0f);
+        const float beta = math::clamp(sys->params.verticalBiasAlpha, 0.0f, 1.0f);
         sys->verticalAccBias += (verticalAcc - sys->verticalAccBias) * beta;
     }
     verticalAcc -= sys->verticalAccBias;
 
-    const float accAlpha = ClampFloat(sys->params.verticalAccLp, 0.0f, 1.0f);
+    const float accAlpha = math::clamp(sys->params.verticalAccLp, 0.0f, 1.0f);
     sys->verticalAccFiltered += (verticalAcc - sys->verticalAccFiltered) * accAlpha;
 
     const float azMss = sys->verticalAccFiltered * G_CONST;
     sys->heaveVelocity += azMss * dt;
-    sys->heaveVelocity = DigitalFilterApply(&sys->hpFilterVel, sys->heaveVelocity);
+    sys->heaveVelocity = sys->hpFilterVel.update(sys->heaveVelocity);
 
     sys->heavePosition += sys->heaveVelocity * dt;
-    sys->heavePosition = DigitalFilterApply(&sys->hpFilterPos, sys->heavePosition);
+    sys->heavePosition = sys->hpFilterPos.update(sys->heavePosition);
 }
 
-FusionVector Tactical_GetEarthAcceleration(const TacticalSystem *const sys, const FusionVector acc) {
-    const FusionQuaternion q = sys->quaternion;
-    const float qw = q.element.w;
-    const float qx = q.element.x;
-    const float qy = q.element.y;
-    const float qz = q.element.z;
+math::vector3 Tactical_GetEarthAcceleration(const TacticalSystem *const sys, const math::vector3 acc) {
+    const math::quaternion q = sys->quaternion;
+    const float qw = q.w;
+    const float qx = q.x;
+    const float qy = q.y;
+    const float qz = q.z;
 
-    const float ax = acc.axis.x;
-    const float ay = acc.axis.y;
-    const float az = acc.axis.z;
+    const float ax = acc.x;
+    const float ay = acc.y;
+    const float az = acc.z;
 
-    FusionVector earthAcc;
-    earthAcc.axis.x = (qw * qw + qx * qx - qy * qy - qz * qz) * ax +
+    math::vector3 earthAcc;
+    earthAcc.x = (qw * qw + qx * qx - qy * qy - qz * qz) * ax +
                       2.0f * (qx * qy - qw * qz) * ay +
                       2.0f * (qx * qz + qw * qy) * az;
 
-    earthAcc.axis.y = 2.0f * (qx * qy + qw * qz) * ax +
+    earthAcc.y = 2.0f * (qx * qy + qw * qz) * ax +
                       (qw * qw - qx * qx + qy * qy - qz * qz) * ay +
                       2.0f * (qy * qz - qw * qx) * az;
 
-    earthAcc.axis.z = 2.0f * (qx * qz - qw * qy) * ax +
+    earthAcc.z = 2.0f * (qx * qz - qw * qy) * ax +
                       2.0f * (qy * qz + qw * qx) * ay +
                       (qw * qw - qx * qx - qy * qy + qz * qz) * az;
 
-    if (sys->convention == FusionConventionNed) {
-        earthAcc.axis.z += 1.0f;
+    if (sys->convention == TacticalConvention::ned) {
+        earthAcc.z += 1.0f;
     } else {
-        earthAcc.axis.z -= 1.0f;
+        earthAcc.z -= 1.0f;
     }
 
     return earthAcc;

@@ -2,7 +2,7 @@
 #include "log.hpp"
 #include "bsp_dwt.hpp"
 
-#include "constants.hpp"
+#include "geometry.hpp"
 #include "constrain.hpp"
 
 #include <cmath>
@@ -43,19 +43,6 @@ void update_dt_telemetry(telemetry& out, float dt)
     out.dt_s = dt;
     out.dt_min_s = out.update_count == 0U || dt < out.dt_min_s ? dt : out.dt_min_s;
     out.dt_max_s = dt > out.dt_max_s ? dt : out.dt_max_s;
-}
-
-float vector_norm(float x, float y, float z)
-{
-    return std::sqrt(x * x + y * y + z * z);
-}
-
-#endif
-
-#if HAS_DMIMU
-constexpr float degrees_to_radians(float degrees)
-{
-    return degrees * (math::pi / 180.0f);
 }
 
 #endif
@@ -171,30 +158,6 @@ fusion::thermal_sample fusion::temperature_snapshot() const
     return sample;
 }
 
-bool fusion::update_temperature()
-{
-    thermal_sample next{};
-    const auto read_status = imu_.read_temperature(&next.celsius);
-    const bool valid = read_status == types::status::ok && valid_temperature(next.celsius);
-    next.ready = valid && next.celsius >= (cfg_.temperature_control_enabled ? cfg_.target_temp - 0.7f : 20.0f);
-    next.status = read_status != types::status::ok ? read_status :
-                  (valid ? types::status::ok : types::status::error);
-    next.tick = tx_time_get();
-    if (cfg_.temperature_control_enabled)
-    {
-        const float duty = valid ? calculate_temperature_duty(next.celsius) : 0.0f;
-        const auto result = imu_.set_heater_duty(duty);
-        if (result != types::status::ok) next.status = result;
-        if (next.status != types::status::ok) (void)imu_.enable_heater(false);
-    }
-    next.ready = next.ready && next.status == types::status::ok;
-    TX_INTERRUPT_SAVE_AREA
-    TX_DISABLE
-    thermal_ = next;
-    TX_RESTORE
-    return next.status == types::status::ok;
-}
-
 void fusion::temperature_thread_entry(ULONG arg)
 {
     auto& self = *reinterpret_cast<fusion*>(arg);
@@ -212,7 +175,29 @@ void fusion::temperature_thread_entry(ULONG arg)
     for (;;)
     {
         const ULONG began = tx_time_get();
-        if (!self.update_temperature()) return;
+        thermal_sample next{};
+        const types::status read_status = self.imu_.read_temperature(&next.celsius);
+        const bool valid = read_status == types::status::ok && self.valid_temperature(next.celsius);
+        next.ready = valid && next.celsius >=
+            (self.cfg_.temperature_control_enabled ? self.cfg_.target_temp - 0.7f : 20.0f);
+        next.status = read_status != types::status::ok ? read_status :
+                      (valid ? types::status::ok : types::status::error);
+        next.tick = tx_time_get();
+        if (self.cfg_.temperature_control_enabled)
+        {
+            const float duty = valid ? self.calculate_temperature_duty(next.celsius) : 0.0f;
+            const types::status result = self.imu_.set_heater_duty(duty);
+            if (result != types::status::ok) next.status = result;
+            if (next.status != types::status::ok) (void)self.imu_.enable_heater(false);
+        }
+        next.ready = next.ready && next.status == types::status::ok;
+        {
+            TX_INTERRUPT_SAVE_AREA
+            TX_DISABLE
+            self.thermal_ = next;
+            TX_RESTORE
+        }
+        if (next.status != types::status::ok) return;
         const ULONG elapsed = tx_time_get() - began;
         // Run at an independent configured period; an overrun still yields CPU time.
         tx_thread_sleep(elapsed < temp_control_period_ticks ? temp_control_period_ticks - elapsed : 1U);
@@ -487,8 +472,8 @@ void fusion::imu_thread_entry(ULONG arg)
                 update_solver(self->solver_);
                 timing.solved = timing.update_count > 0U;
                 self->telemetry_.temperature = reading.temperature;
-                self->telemetry_.accel_norm = vector_norm(reading.accel.x, reading.accel.y, reading.accel.z);
-                self->telemetry_.gyro_norm = vector_norm(reading.gyro.x, reading.gyro.y, reading.gyro.z);
+                self->telemetry_.accel_norm = math::magnitude({reading.accel.x, reading.accel.y, reading.accel.z});
+                self->telemetry_.gyro_norm = math::magnitude({reading.gyro.x, reading.gyro.y, reading.gyro.z});
                 self->telemetry_.gyro[0] = reading.gyro.x;
                 self->telemetry_.gyro[1] = reading.gyro.y;
                 self->telemetry_.gyro[2] = reading.gyro.z;
@@ -612,9 +597,9 @@ void dmimu_reader::publish_snapshot(const imu::dmimu::snapshot& snapshot)
     std::memcpy(output.quaternion, snapshot.quaternion, sizeof(output.quaternion));
     // The device protocol exposes Euler angles in degrees. The AHRS-facing
     // message contract uses radians, matching the existing BMI088 output.
-    output.yaw = degrees_to_radians(snapshot.yaw_deg);
-    output.pitch = degrees_to_radians(snapshot.pitch_deg);
-    output.roll = degrees_to_radians(snapshot.roll_deg);
+    output.yaw = math::degrees_to_radians(snapshot.yaw_deg);
+    output.pitch = math::degrees_to_radians(snapshot.pitch_deg);
+    output.roll = math::degrees_to_radians(snapshot.roll_deg);
     output.gyro_r = snapshot.gyro.x;
     output.gyro_p = snapshot.gyro.y;
     output.gyro_y = snapshot.gyro.z;

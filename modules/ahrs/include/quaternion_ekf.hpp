@@ -1,6 +1,7 @@
 #pragma once
 
-#include "constants.hpp"
+#include "geometry.hpp"
+#include "constrain.hpp"
 
 #include "arm_math.h"
 
@@ -98,7 +99,7 @@ public:
         measured_vector_[1] = accel_[1] * accel_inv_norm;
         measured_vector_[2] = accel_[2] * accel_inv_norm;
 
-        gyro_norm = 1.0f / math::inv_sqrt(gyro_[0] * gyro_[0] + gyro_[1] * gyro_[1] + gyro_[2] * gyro_[2]);
+        gyro_norm = math::magnitude({gyro_[0], gyro_[1], gyro_[2]});
         accl_norm = 1.0f / accel_inv_norm;
         StableFlag = gyro_norm < 0.3f && accl_norm > 9.3f && accl_norm < 10.3f;
 
@@ -125,11 +126,10 @@ public:
         GyroBias[1] = filtered_value_[5];
         GyroBias[2] = 0.0f;
 
-        yaw = std::atan2(2.0f * (q[1] * q[2] + q[0] * q[3]),
-                         q[0] * q[0] + q[1] * q[1] - q[2] * q[2] - q[3] * q[3]);
-        pitch = -std::asin(clamp(2.0f * (q[1] * q[3] - q[0] * q[2]), -1.0f, 1.0f));
-        roll = std::atan2(2.0f * (q[0] * q[1] + q[2] * q[3]),
-                          q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3]);
+        const math::euler_angles angles = math::to_euler({q[0], q[1], q[2], q[3]});
+        yaw = angles.yaw;
+        pitch = angles.pitch;
+        roll = angles.roll;
 
         if (yaw - prev_yaw_ > math::pi)
         {
@@ -195,11 +195,6 @@ private:
         0.0f, 100000.0f, 0.0f,
         0.0f, 0.0f, 100000.0f,
     };
-
-    static float clamp(float value, float min, float max)
-    {
-        return value < min ? min : (value > max ? max : value);
-    }
 
     void init_matrices()
     {
@@ -328,7 +323,7 @@ private:
 
         for (uint8_t i = 0; i < 3; ++i)
         {
-            OrientationCosine[i] = std::acos(std::fabs(clamp(temp_vector_data_[i], -1.0f, 1.0f)));
+            OrientationCosine[i] = std::acos(std::fabs(math::clamp(temp_vector_data_[i], -1.0f, 1.0f)));
         }
 
         set_matrix_shape(temp_vector1_, 3, 1);
@@ -401,7 +396,7 @@ private:
         {
             for (uint8_t i = 4; i < 6; ++i)
             {
-                temp_vector_data_[i] = clamp(temp_vector_data_[i], -1e-2f * dt, 1e-2f * dt);
+                temp_vector_data_[i] = math::clamp(temp_vector_data_[i], -1e-2f * dt, 1e-2f * dt);
             }
         }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "biquad.hpp"
+
 namespace filter
 {
 
@@ -16,10 +18,7 @@ private:
     float b1_ = 0.0f;
     float a1_ = 0.0f;
     float a2_ = 0.0f;
-    float x1_ = 0.0f;
-    float x2_ = 0.0f;
-    float y1_ = 0.0f;
-    float y2_ = 0.0f;
+    biquad_state state_{};
 };
 
 } // namespace filter
