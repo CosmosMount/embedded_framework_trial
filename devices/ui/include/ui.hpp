@@ -57,7 +57,7 @@ class canvas
 public:
     static canvas& instance();
 
-    types::status init(const config& cfg = {});
+    void init(const config& cfg = {});
 
     void set_sender_receiver_id(uint16_t sender_id, uint16_t receiver_id);
 

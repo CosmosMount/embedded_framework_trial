@@ -17,11 +17,10 @@ canvas& canvas::instance()
     return inst;
 }
 
-types::status canvas::init(const config& cfg)
+void canvas::init(const config& cfg)
 {
     cfg_ = cfg;
     initialized_ = true;
-    return types::status::ok;
 }
 
 canvas::tx_frame_header* canvas::frame_header()

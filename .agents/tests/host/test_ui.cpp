@@ -22,7 +22,7 @@ status transmit(port, const uint8_t* data, size_t size, uint32_t) {
 int main() {
     auto& canvas = ui::canvas::instance();
     require(canvas.update() == status::not_initialized);
-    require(canvas.init() == status::ok);
+    canvas.init();
     canvas.set_sender_receiver_id(1,0x101);
     require(canvas.create_string(1,ui::object_color::white,1,0,0,12,nullptr) == -2);
     int a = canvas.create_string(1,ui::object_color::white,1,1,2,12,"alpha");
