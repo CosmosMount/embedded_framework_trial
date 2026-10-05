@@ -217,7 +217,6 @@ bool fusion::create_resources()
         return false;
     }
 
-    bool heartbeat_ready = false;
     bool gyro_ready = false;
     bool output_ready = false;
     bool temperature_created = false;
@@ -231,15 +230,8 @@ bool fusion::create_resources()
         (void)imu_.shutdown();
         if (output_ready) (void)msg::deinit(output_);
         if (gyro_ready) (void)tx_semaphore_delete(&gyro_data_ready_sem_);
-        if (heartbeat_ready) (void)tx_semaphore_delete(&heartbeat_sem_);
     };
 
-    if (tx_semaphore_create(&heartbeat_sem_, const_cast<CHAR*>("ahrs_hb"), 0) != TX_SUCCESS)
-    {
-        rollback();
-        return false;
-    }
-    heartbeat_ready = true;
     if (tx_semaphore_create(&gyro_data_ready_sem_, const_cast<CHAR*>("ahrs_gyro"), 0) != TX_SUCCESS)
     {
         rollback();
@@ -481,7 +473,7 @@ void fusion::imu_thread_entry(ULONG arg)
             }
         }
 
-        tx_semaphore_put(&self->heartbeat_sem_);
+        self->heartbeat_.pulse(static_cast<uint32_t>(tx_time_get()));
         self->fill_state(output, reading);
         msg::publish(self->output_, output);
         self->imu_loop_stats_.record(bsp::dwt::timeline_us() - loop_start_us, 500U);
@@ -516,14 +508,8 @@ types::status dmimu_reader::create_resources()
         return telemetry_.device_status;
     }
 
-    if (tx_semaphore_create(&heartbeat_sem_, const_cast<CHAR*>("dmimu_hb"), 0) != TX_SUCCESS)
-    {
-        return types::status::error;
-    }
-
     if (msg::init(output_) != types::status::ok)
     {
-        (void)tx_semaphore_delete(&heartbeat_sem_);
         return types::status::error;
     }
 
@@ -534,7 +520,6 @@ types::status dmimu_reader::create_resources()
                          TX_AUTO_START) != TX_SUCCESS)
     {
         (void)msg::deinit(output_);
-        (void)tx_semaphore_delete(&heartbeat_sem_);
         return types::status::error;
     }
     telemetry_.resources_created = true;
@@ -687,7 +672,7 @@ void dmimu_reader::thread_entry(ULONG arg)
         was_online = is_online;
 
         self->telemetry_.device = self->dmimu_.diagnostics_snapshot();
-        tx_semaphore_put(&self->heartbeat_sem_);
+        self->heartbeat_.pulse(static_cast<uint32_t>(tx_time_get()));
         self->loop_stats_.record(bsp::dwt::timeline_us() - loop_start_us, 1000U);
         const auto& stats = self->loop_stats_;
         self->telemetry_.loop_runtime_us = stats.last_us;

@@ -4,6 +4,7 @@
 #include "callback.hpp"
 #include "referee_protocol.hpp"
 #include "tx_api.h"
+#include "heartbeat.hpp"
 #include "config.hpp"
 
 #include <type_traits>
@@ -79,7 +80,7 @@ public:
     static receiver& instance();
 
     types::status init(const config& cfg = {});
-    TX_SEMAPHORE* heartbeat_sem() { return &heartbeat_sem_; }
+    core::heartbeat_snapshot heartbeat() const noexcept { return heartbeat_.read(); }
     // Capture once at the control-cycle boundary and share the resulting const value.
     snapshot read_snapshot() const noexcept;
 
@@ -131,7 +132,7 @@ private:
 
     config cfg_{};
     TX_THREAD thread_{};
-    TX_SEMAPHORE heartbeat_sem_{};
+    core::heartbeat heartbeat_{};
     alignas(8) uint8_t stack_[1536]{};
 
     receive_fifo rx_fifo_{};

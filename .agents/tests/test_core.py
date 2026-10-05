@@ -101,7 +101,7 @@ class CoreTests(unittest.TestCase):
         cases = [[], ["flow"], ["start_failure"], ["stop_failure"], ["resume_failure"],
                  ["thread_failure"], ["msg_failure"]] if name == "remotes" else [[]]
         if name == "dmimu":
-            cases += [[case] for case in ("success", "semaphore", "topic", "thread", "cleanup", "stale_thread", "fresh_thread")]
+            cases += [[case] for case in ("success", "queue", "topic", "thread", "cleanup", "stale_thread", "fresh_thread")]
         if name == "referee":
             cases += [[case] for case in ("overflow", "split")]
         if name == "fdcan":

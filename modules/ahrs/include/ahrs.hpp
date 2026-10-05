@@ -14,6 +14,7 @@
 #include "msg.hpp"
 #include "duration_stats.hpp"
 #include "tx_api.h"
+#include "heartbeat.hpp"
 #include <type_traits>
 
 namespace ahrs
@@ -118,7 +119,7 @@ public:
     static fusion& instance();
 
     types::status init(const config& cfg = {});
-    TX_SEMAPHORE* heartbeat_sem() { return &heartbeat_sem_; }
+    core::heartbeat_snapshot heartbeat() const noexcept { return heartbeat_.read(); }
     msg::channel<imu::state>& output() noexcept { return output_; }
     const telemetry& diagnostics() const { return telemetry_; }
 
@@ -166,7 +167,7 @@ private:
     imu::bmi088 imu_{};
 
     TX_THREAD imu_thread_{};
-    TX_SEMAPHORE heartbeat_sem_{};
+    core::heartbeat heartbeat_{};
     TX_SEMAPHORE gyro_data_ready_sem_{};
 
     // Keep the established stack budget for either selected solver's update frames.
@@ -191,7 +192,7 @@ public:
     // configuration layer must omit this call when DMIMU is not configured.
     types::status init(const imu::dmimu::config& dmimu_cfg,
                        const dmimu_config& reader_cfg = {});
-    TX_SEMAPHORE* heartbeat_sem() { return &heartbeat_sem_; }
+    core::heartbeat_snapshot heartbeat() const noexcept { return heartbeat_.read(); }
     msg::channel<imu::state>& output() noexcept { return output_; }
     const dmimu_telemetry& diagnostics() const { return telemetry_; }
 
@@ -207,7 +208,7 @@ private:
     imu::dmimu dmimu_{};
 
     TX_THREAD thread_{};
-    TX_SEMAPHORE heartbeat_sem_{};
+    core::heartbeat heartbeat_{};
     alignas(8) uint8_t stack_[2048]{};
 
     msg::channel<imu::state> output_{};

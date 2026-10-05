@@ -13,6 +13,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include "heartbeat.hpp"
 #include <string>
 #include <vector>
 
@@ -90,6 +91,18 @@ void test_pid()
 
 void test_callbacks()
 {
+    core::heartbeat heartbeat;
+    require(!heartbeat.read().fresh(0, 10), "unstarted worker is not alive at tick zero");
+    heartbeat.pulse(0);
+    const auto monitor = heartbeat.read();
+    const auto application = heartbeat.read();
+    require(monitor.fresh(9, 10) && application.fresh(9, 10), "independent heartbeat observers");
+    require(!monitor.fresh(10, 10), "heartbeat expires without consumption");
+    for (unsigned tick = 1; tick < 1000; ++tick) heartbeat.pulse(tick);
+    require(!heartbeat.read().fresh(1009, 10), "old heartbeats do not accumulate");
+    heartbeat.pulse(UINT32_MAX - 2U);
+    require(heartbeat.read().fresh(1, 5) && !heartbeat.read().fresh(2, 5),
+            "heartbeat tick wrap and expiry");
     using callback = core::callback<int(int)>;
     receiver object;
     const receiver read_only{9};

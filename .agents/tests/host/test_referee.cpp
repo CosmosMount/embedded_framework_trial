@@ -38,6 +38,9 @@ UINT tx_thread_resume(TX_THREAD*) { return TX_SUCCESS; }
 UINT tx_thread_delete(TX_THREAD*) { return TX_SUCCESS; }
 UINT tx_thread_sleep(ULONG ticks) {
     require(ticks == 1);
+    const auto monitor = referee::receiver::instance().heartbeat();
+    const auto application = referee::receiver::instance().heartbeat();
+    require(monitor.fresh(7, 10) && application.fresh(7, 10) && !monitor.fresh(17, 10));
     auto snapshot = referee::receiver::instance().read_snapshot();
     if (selected == scenario::overflow)
     {

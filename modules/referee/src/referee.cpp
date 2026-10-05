@@ -112,14 +112,11 @@ void receiver::on_rx(bsp::usart::port, const bsp::usart::rx_frame& frame)
 
 types::status receiver::create_resources()
 {
-    if (tx_semaphore_create(&heartbeat_sem_, const_cast<CHAR*>("referee_hb"), 0) != TX_SUCCESS)
-        return types::status::error;
     if (tx_thread_create(&thread_, const_cast<CHAR*>("referee"), thread_entry,
                          reinterpret_cast<ULONG>(this), stack_, sizeof(stack_),
                          cfg_.thread_priority, cfg_.thread_priority, TX_NO_TIME_SLICE,
                          TX_DONT_START) != TX_SUCCESS)
     {
-        (void)tx_semaphore_delete(&heartbeat_sem_);
         return types::status::error;
     }
     auto result = bsp::usart::init(cfg_.uart_port, bsp::usart::mode::dma);
@@ -135,7 +132,6 @@ types::status receiver::create_resources()
         if (stopped != types::status::ok) return stopped;
     }
     (void)tx_thread_delete(&thread_);
-    (void)tx_semaphore_delete(&heartbeat_sem_);
     return result;
 }
 
@@ -263,7 +259,7 @@ void receiver::thread_entry(ULONG arg)
             self->published_ = self->working_;
             TX_RESTORE
         }
-        tx_semaphore_put(&self->heartbeat_sem_);
+        self->heartbeat_.pulse(static_cast<uint32_t>(tx_time_get()));
         tx_thread_sleep(1);
     }
 }

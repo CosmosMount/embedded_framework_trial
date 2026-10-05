@@ -19,9 +19,9 @@ unsigned publications = 0;
 imu::state published{};
 unsigned head = 0, count = 0, replenish = 0;
 ULONG tick = 10;
-unsigned queue_creates = 0, semaphore_creates = 0, semaphore_deletes = 0;
+unsigned queue_creates = 0;
 unsigned topic_creates = 0, topic_deletes = 0, thread_creates = 0;
-UINT semaphore_result = TX_SUCCESS, thread_result = TX_SUCCESS, cleanup_result = TX_SUCCESS;
+UINT queue_result = TX_SUCCESS, thread_result = TX_SUCCESS, cleanup_result = TX_SUCCESS;
 status topic_result = status::ok;
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -43,7 +43,7 @@ ULONG tx_time_get() { return tick; }
 UINT tx_queue_create(TX_QUEUE*, CHAR*, UINT words, void*, ULONG) {
     ++queue_creates;
     queue_bytes = words * sizeof(ULONG);
-    require(queue_bytes <= sizeof(queue[0]), "queue payload size"); return TX_SUCCESS;
+    require(queue_bytes <= sizeof(queue[0]), "queue payload size"); return queue_result;
 }
 UINT tx_queue_delete(TX_QUEUE*) { return TX_SUCCESS; }
 UINT tx_queue_send(TX_QUEUE*, void* data, ULONG) {
@@ -59,9 +59,6 @@ UINT tx_queue_receive(TX_QUEUE*, void* data, ULONG wait) {
     if (replenish) { --replenish; tx_queue_send(nullptr, data, TX_NO_WAIT); }
     return TX_SUCCESS;
 }
-UINT tx_semaphore_create(TX_SEMAPHORE*, CHAR*, ULONG) { ++semaphore_creates; return semaphore_result; }
-UINT tx_semaphore_delete(TX_SEMAPHORE*) { ++semaphore_deletes; return cleanup_result; }
-UINT tx_semaphore_put(TX_SEMAPHORE*) { return TX_SUCCESS; }
 UINT tx_thread_create(TX_THREAD*, CHAR*, void (*entry)(ULONG), ULONG arg, void*, ULONG, UINT, UINT, ULONG, UINT) {
     worker = entry; worker_arg = arg;
     ++thread_creates; return thread_result;
@@ -97,12 +94,14 @@ int main(int argc, char** argv) {
             tick = fresh ? 15 : 150;
             run_worker = true;
             try { worker(worker_arg); } catch (const end_run&) {}
+            const auto progress = reader.heartbeat();
+            require(progress.started && progress.last_tick == tick, "worker progress independent of data validity");
             require(publications == (fresh ? 1U : 0U), "stale queued data is not published online");
             if (fresh) require(published.online && published.received_tick == 10, "published reception time");
             return 0;
         }
         if (argc > 1) {
-            if (std::strcmp(argv[1], "semaphore") == 0) semaphore_result = TX_NOT_AVAILABLE;
+            if (std::strcmp(argv[1], "queue") == 0) queue_result = TX_NOT_AVAILABLE;
             if (std::strcmp(argv[1], "topic") == 0) topic_result = status::error;
             if (std::strcmp(argv[1], "thread") == 0 || std::strcmp(argv[1], "cleanup") == 0)
                 thread_result = TX_NOT_AVAILABLE;
@@ -111,10 +110,9 @@ int main(int argc, char** argv) {
             imu::dmimu::config cfg{}; cfg.transport.can_bus = static_cast<bsp::can::bus>(0);
             const status expected = std::strcmp(argv[1], "success") == 0 ? status::ok : status::error;
             require(reader.init(cfg) == expected && reader.init(cfg) == expected, "cached initialization status");
-            require(queue_creates == 1 && semaphore_creates == 1, "no live resource recreation");
-            require(topic_creates == (semaphore_result == TX_SUCCESS ? 1U : 0U), "topic creation order");
-            require(thread_creates == (semaphore_result == TX_SUCCESS && topic_result == status::ok ? 1U : 0U), "thread creation order");
-            require(semaphore_deletes == (topic_result != status::ok || thread_result != TX_SUCCESS ? 1U : 0U), "heartbeat rollback");
+            require(queue_creates == 1, "no live resource recreation");
+            require(topic_creates == (queue_result == TX_SUCCESS ? 1U : 0U), "topic creation order");
+            require(thread_creates == (queue_result == TX_SUCCESS && topic_result == status::ok ? 1U : 0U), "thread creation order");
             require(topic_deletes == (thread_result != TX_SUCCESS ? 1U : 0U), "channel rollback");
             return 0;
         }
