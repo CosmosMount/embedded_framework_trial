@@ -144,3 +144,22 @@ CAN 公共契约收敛（基线 364418d）：两板 bsp_can.hpp 完全一致且�
 | 验证与分步提交 | 当前完整 31 项回归 PASS；四板型/构建类型的数学选项与独立 DSP 目标核验 PASS；四份入口文档本地路径及 diff 检查 PASS；改动已分步提交，未操作硬件 |
 
 结构清理目前无新的已证实候选。剩余“向量/矩阵选用哪种实现更快”的目标板周期比较缺少既有测量入口、实际输入与误差预算，已向用户询问；不能由默认链接、库名或主机时间替代。继续保留已有独立结构收益与精确方案，不宣称全目标完成或性能最优，不为了自动续轮增加无收益改动。
+
+## H723 无外接设备基础验证与 logger（2026-10-05）
+
+用户授权使用已连接的 ST-Link 和相邻 pnx_platform 应用，随后要求先验证无需外设的基础功能及分析 logger 对 Flash 寿命的影响。有效生产基线为 2937231，工作区开始时干净；本轮不修改生产算法或增加 Flash 日志路径。收益是补足真实 ThreadX、DWT、RAM 日志复位和生产 EKF 的目标运行证据，新增唯一 target 测试入口，不将主机 HAL 替身当作实机外设通信。此前“未操作硬件”仅描述其所在历史验收。
+
+测试固件以 CMAKE_PROJECT_pnx_embedded_INCLUDE 加载 `.agents/tests/target/inject.cmake`，只在独立 build/h723-core-test 构建中将 app/app.cpp 换为 core.cpp；链接生产库和真实 ThreadX。首次编译因测试文件未显式包含芯片头而 FAIL，加入 main.h 并拆开易误读的循环后构建 PASS，生产代码无需修改。Release 使用 -Os -g -DNDEBUG，芯片 STM32H723VGTx，ST-Link 序列号 005300224A00001156313848，SWD 4000 kHz，实际 SystemCoreClock 520 MHz。
+
+验证命令均在仓库根目录执行：
+
+- `python -m unittest discover -s .agents/tests -v`：31 项 PASS，无跳过；包括协议、设备失败路径、AHRS/CMSIS、日志和消息的生产路径主机回归。
+- SPEC 中独立目标配置命令及 `cmake --build build/h723-core-test`：PASS；FLASH 64596 B、DTCMRAM 67264 B 是测试固件占用，不代表产品额外开销。
+- 经 pnx_platform DapSession 烧录、运行测试，再软复位：两轮各 128 检查 PASS，stage=8、failures=0；boot_count 1→2，上一轮 marker 保留检查通过。随后烧录、校验并运行 build/h723-debug/pnx_embedded.elf，恢复成功。
+- 整理后的 `node .agents/tests/target/run.mjs --elf build/h723-core-test/pnx_embedded.elf --restore build/h723-debug/pnx_embedded.elf --platform ../pnx_platform/pnx_platform --probe 005300224A00001156313848`：PASS；按 ELF 符号寻址，两轮各 128 检查、零失败，boot_count 3→4，复位保留通过；再次恢复默认固件成功。原临时 runner 已删除，保留可复用入口。
+
+覆盖数学/矩阵、PID、IIR/高通/Kalman、CRC、回调、消息 latest 和真实线程锁竞争、DWT 随 RTOS tick 前进、DMA 缓冲地址契约、日志等级/覆盖/参数/软复位保留，以及两套 EKF 的 2000 步合成旋转。logger 单次固定文本写入观察为 228–229 cycles，约 0.44 µs；仅启动轮次的单次样本且含取周期成本，不是最坏耗时或中断竞争上限。未运行 F407 实机、看门狗复位、断电、真实 DMA/总线/传感器/电机通信，未补证向量/矩阵方案的周期排名；不能宣称所有可选配置和输入均已完善。
+
+调用链及链接脚本复核：logger 元数据和定长记录只写 `.noinit` DTCMRAM，无 Flash program/erase 调用；现有启动、AHRS 故障/状态转换与 CAN 重启记录保持使用。运行时调用不消耗 Flash 擦写耐久度，四次测试/恢复烧录本身会擦写，软复位检查不烧录。DESIGN 引用 ST DS13313 表 45 的最小 10 kcycles 条件并区分调用频率与擦除频率；SPEC 保留非阻塞、故障/状态转换日志边界，不为高频成功路径增加打印或 Flash 持久化。README、SPEC 和 DESIGN 同步入口与边界，无独立测量报告或原始日志副本。
+
+交付检查：runner 的 `node --check`、四份入口文档本地链接与 `git diff --check` PASS；目标测试在 bb5df0d 单独提交，随后单独提交文档与本计划。默认生产入口和配置未变，独立测试不进入普通构建。本轮目标基础验证闭合；总体数学周期比较及上述外设/复位边界仍未完成，不以新增测试证明仓库已经没有任何缺陷。

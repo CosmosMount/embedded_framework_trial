@@ -58,9 +58,26 @@
 | `cmake --build --preset f407-debug` | F407 Configure 成功；成功链接对应 ELF |
 | `python -m unittest discover -s .agents/tests -v` | 配置生成与自有库、驱动、模块的生产路径主机回归；需要 Python 3.9+、CMake 和主机 g++，缺 g++ 的跳过不能计为通过 |
 | `git diff --check` | 受跟踪修改无空白错误，不替代行为测试 |
-| 目标硬件检查 | 操作者明确执行，具体接线、业务指标与步骤尚未定义 |
+| 目标硬件检查 | 须获硬件操作授权；H723 无外接设备的基础测试见下文，外设通信与产品指标另行验收 |
 
 Release 使用同板型的 `*-release` preset。根工程未注册 CTest 测试，空测试集不能作为回归通过证据。
+
+H723 基础实机测试使用 [.agents/tests/target/core.cpp](../tests/target/core.cpp) 替换该次构建的应用入口，运行真实 ThreadX 和生产库；正常构建不加载测试。覆盖数学/矩阵、PID、滤波、CRC、回调、latest 消息与线程锁竞争、DWT、DMA 缓冲地址校验、RAM 日志及两套 EKF 的合成输入。DMA 地址校验不等于 DMA 外设传输，协议主机回归不等于总线通信；未覆盖的硬件行为不得由此推导通过。
+
+在仓库根目录配置和构建独立测试固件（PowerShell）：
+
+```powershell
+cmake -S . -B build/h723-core-test -G Ninja -DPNX_BOARD=h723_dmmc02 -DCMAKE_BUILD_TYPE=Release '-DCMAKE_C_FLAGS_RELEASE=-Os -g -DNDEBUG' '-DCMAKE_CXX_FLAGS_RELEASE=-Os -g -DNDEBUG' "-DCMAKE_PROJECT_pnx_embedded_INCLUDE=$((Resolve-Path .agents/tests/target/inject.cmake).Path)"
+cmake --build build/h723-core-test
+```
+
+确认上述构建及默认 `h723-debug` 构建成功后，通过已安装的 pnx_platform 应用后端和指定 ST-Link 执行：
+
+```powershell
+node .agents/tests/target/run.mjs --elf build/h723-core-test/pnx_embedded.elf --restore build/h723-debug/pnx_embedded.elf --platform ../pnx_platform/pnx_platform --probe '实际探针序列号'
+```
+
+此命令会烧录测试固件、运行并检查断言、软复位检查日志保留，然后烧录并运行 `--restore` 指定固件；两次烧录都会擦写 Flash。脚本按 ELF 符号定位结果，断言或保留验证失败返回非零；恢复失败同样报错，须处理后再交付设备。恢复镜像来自指定构建，不是自动备份板上原有固件。F407 实机、看门狗复位、断电及外设通信尚需分别验证。
 
 ## 未决事项
 
@@ -128,7 +145,7 @@ DESIGN 存放项目通用设计，说明职责、依赖、数据流、状态与�
 - 异步接收数据的新鲜度以接收时刻判断，排队、解码及重复发布不得刷新数据年龄。分帧读数须限制组装时间，完整快照使用能反映最旧有效组成部分的时间戳；过期工作状态不得与新帧拼接，序号不能因短暂失联而复用。校验与解码失败保留上一有效输出，并由消费者继续检查其年龄。
 - latest 消息通道默认不等待锁；读写竞争返回 busy，失败不消费待处理状态或改写载荷。调用方显式处理跳过/沿用策略；阻塞发布必须显式启用，不作为控制周期的默认行为。
 - 通用操作状态限定为 `ok`、`error`、`not_configured`、`invalid_arg`、`busy`、`not_initialized`、`timeout`。其中 `busy` 统一表示非阻塞调用当前无法取得资源或数据，`invalid_arg` 包含非法参数与非法调用上下文；协议或设备的专有状态由其自身类型表达，不继续扩张通用枚举。查询与纯计算直接返回值。不会失败的赋值、状态重置和纯副作用操作允许 void，不添加永远返回 `ok` 的分支。HAL/ThreadX 固定 void 回调必须保留框架签名，通过状态或计数报告失败，不增加永远返回 `ok` 的适配层。
-- 日志只补充无法由调用者及时观察的故障和状态转换，不替代返回状态、设备快照或产品保护。记录必须定长、有界、无动态分配且不等待锁；高频采样和每周期成功路径不得写日志。日志满时覆盖最旧记录，不得阻塞控制周期。保留 RAM 日志只能声明跨软件/看门狗复位保留，不能声明断电保存；调试器下载、复位方式和启动代码是否清 RAM 仍须按工具链验证。
+- 日志只补充无法由调用者及时观察的故障和状态转换，不替代返回状态、设备快照或产品保护。记录必须定长、有界、无动态分配且不等待锁；高频采样和每周期成功路径不得写日志。日志满时覆盖最旧记录，不得阻塞控制周期。当前记录、清空及复位保留只操作 RAM，不接入 Flash 擦写。断电持久化须有独立需求、擦写预算与失败语义。保留 RAM 日志只能声明跨软件/看门狗复位保留，不能声明断电保存；调试器下载、复位方式和启动代码是否清 RAM 仍须按工具链验证。
 - 不把未在当前产品启用的驱动判定为幽灵；检查生成配置、公开接口、回调和可选构建后再退役。通用模板应以真实第二个实现共享语义，不能为未知硬件预置空基类。
 
 同类设备的归属以职责决定，不以同步轮询或异步传输方式区分层级。遥控器的协议解码和设备读数统一归 devices/remotes；模块只负责调度、缓存交接、失联、事件及发布。设备不得依赖模块类型或创建线程；共享数据定义不得依赖具体硬件。

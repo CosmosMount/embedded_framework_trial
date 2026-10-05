@@ -50,6 +50,8 @@ git diff --check
 
 `logging::write()` 写入固定 32 字节记录，不分配内存、不格式化字符串、不等待互斥锁。容量和最低等级由 configs 的 `logging` 参数生成。日志位于 `.noinit` RAM，软件或看门狗复位后可保留，断电后不可保留；调试器可直接查看 `pnx_log_records`、`pnx_log_next_sequence` 和 `pnx_log_boot_count`。日志用于补充故障现场，调用方仍须处理函数返回状态。
 
+当前已记录启动、AHRS 初始化/读数状态转换和 CAN 重启结果。运行时日志不执行 Flash 编程或擦除，调用次数不消耗 Flash 擦写寿命；烧录固件会擦写 Flash。需要断电保存时须另行设计持久化策略，不能直接把高频日志写入 Flash。H723 无外设测试与软复位检查见 [验证入口](.agents/docs/SPEC.md#验证入口)。
+
 ```cpp
 (void)logging::write(logging::level::error, "imu config",
                      types::status::not_configured);
