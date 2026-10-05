@@ -20,6 +20,7 @@ struct port_state
     TX_SEMAPHORE* notify_sem = nullptr;
     bsp::dma::buffer_view rx_buffer{};
     size_t rx_position = 0;
+    volatile types::status rx_status = types::status::not_initialized;
 };
 
 port_state ports[bsp::usart::port_count]{};
@@ -284,14 +285,16 @@ types::status stop_rx(port port)
     auto* ctx = state_of(port);
     auto* handle = handle_of(port);
     if (!ctx || !handle) return types::status::not_configured;
-    if (!ctx->rx_buffer.data()) return types::status::ok;
-    if (HAL_UART_AbortReceive(handle) != HAL_OK) return types::status::error;
+    if (!ctx->rx_buffer.data()) return ctx->rx_status = types::status::ok;
+    if (HAL_UART_AbortReceive(handle) != HAL_OK)
+        return ctx->rx_status = types::status::error;
     TX_INTERRUPT_SAVE_AREA
     TX_DISABLE
     ctx->callback = {};
     ctx->notify_sem = nullptr;
     ctx->rx_buffer = {};
     ctx->rx_position = 0;
+    ctx->rx_status = types::status::ok;
     TX_RESTORE
     return types::status::ok;
 }
@@ -302,24 +305,36 @@ types::status restart_rx(port port)
     UART_HandleTypeDef* handle = handle_of(port);
     if (ctx == nullptr || handle == nullptr || !bsp::dma::valid(ctx->rx_buffer))
     {
+        if (ctx != nullptr) ctx->rx_status = types::status::invalid_arg;
         return types::status::invalid_arg;
     }
 
     if (!prepare_rx_dma_buffer(ctx->rx_buffer))
     {
-        return types::status::invalid_arg;
+        return ctx->rx_status = types::status::invalid_arg;
     }
 
     if (HAL_UARTEx_ReceiveToIdle_DMA(handle, ctx->rx_buffer.data(),
                                      static_cast<uint16_t>(ctx->rx_buffer.logical_size())) != HAL_OK)
     {
-        return types::status::error;
+        return ctx->rx_status = types::status::error;
     }
 
     disable_rx_half_transfer_irq(handle);
     ctx->rx_position = 0;
 
-    return types::status::ok;
+    return ctx->rx_status = types::status::ok;
+}
+
+types::status rx_status(port port)
+{
+    auto* ctx = state_of(port);
+    if (ctx == nullptr || !port_enabled(port)) return types::status::not_configured;
+    TX_INTERRUPT_SAVE_AREA
+    TX_DISABLE
+    const auto result = ctx->rx_status;
+    TX_RESTORE
+    return result;
 }
 
 void receive(UART_HandleTypeDef* handle, uint16_t size)
@@ -518,7 +533,7 @@ types::status configure(port port, const line_config& config)
 
 types::status transmit(port port, const uint8_t* data, size_t len, uint32_t timeout_ms)
 {
-    if (data == nullptr || len == 0)
+    if (data == nullptr || len == 0 || len > UINT16_MAX)
     {
         return types::status::invalid_arg;
     }
@@ -630,12 +645,13 @@ types::status start_rx_to_idle(port port, bsp::dma::buffer_view buffer, rx_callb
                                      static_cast<uint16_t>(buffer.logical_size())) != HAL_OK)
     {
         *ctx = previous;
+        ctx->rx_status = types::status::error;
         return types::status::error;
     }
 
     disable_rx_half_transfer_irq(handle);
 
-    return types::status::ok;
+    return ctx->rx_status = types::status::ok;
 }
 
 } // namespace bsp::usart

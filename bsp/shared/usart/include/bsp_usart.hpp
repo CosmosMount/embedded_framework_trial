@@ -15,7 +15,7 @@ enum class mode : uint8_t
 {
     block = 0,
     dma = 1,
-    it = 2
+    it = 2 // Retains the project's blocking transmit behavior.
 };
 
 enum class word_length : uint8_t
@@ -63,6 +63,8 @@ types::status configure(port port, const line_config& config);
 // DMA mode reserves one staging slot before copying; concurrent submissions return busy.
 // Blocking mode requires a single caller/externally serialized owner and may wait timeout_ms.
 // init/configure and RX ownership changes must be serialized by the application.
+// Length is bytes and must fit the HAL's 16-bit transfer count; DMA is also
+// bounded by its staging slot. Oversized submissions are rejected, never truncated.
 types::status transmit(port port, const uint8_t* data, size_t len, uint32_t timeout_ms);
 // Starts UART receive-to-idle DMA. The buffer and callback target are borrowed
 // until reception stops or the same owner replaces them. The callback and
@@ -71,6 +73,10 @@ types::status transmit(port port, const uint8_t* data, size_t len, uint32_t time
 types::status start_rx_to_idle(port port, bsp::dma::buffer_view buffer, rx_callback callback,
                                TX_SEMAPHORE* notify_sem = nullptr);
 types::status restart_rx(port port);
+// Result of the latest RX start/restart/stop operation, including IRQ recovery.
+// Start requests rejected before HAL (e.g. busy) leave this state unchanged.
+// not_initialized means no operation yet; ok does not imply packets arrived.
+types::status rx_status(port port);
 // Thread-context owner only: stops DMA before releasing buffer/callback references.
 types::status stop_rx(port port);
 
