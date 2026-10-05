@@ -173,3 +173,21 @@ CAN 公共契约收敛（基线 364418d）：两板 bsp_can.hpp 完全一致且�
 平台仓库开始时已有 README、native probe backend、CSV/watch、server、UI 和测试的未提交修改；本轮按具体位置修改并保留它们，不合并提交这些已有工作。pnx_platform 的旧板名映射与当前 penix 目录名不同，实机验证使用已有“目标与插件”中的显式芯片/ELF 设置及独立测试缓存，不修改用户工程配置或扩大板型迁移范围。UI 首次验证发现配置插件关闭会隐藏整个诊断区；日志读取不依赖配置插件，将 logger 选项与其解耦，其余 CAN/状态检查仍需要原插件。
 
 验证：最终平台 `npm test` 共 57 项 PASS，无跳过（新增 4 项覆盖环形覆盖、负值、空日志、初始化/布局、变化/半写入及读取不完整）；Node 语法与 git diff --check PASS。通过平台 DapSession 和真实 HTTP API 均读到 H723 的启动 1、容量 64、sequence 1、tick 0、value 0、info/ok/boot。浏览器操作真实工作台“连接调试器→固件日志→读取快照”，表格正确显示同一记录，目标仍运行；随后点击停止调试释放探针，关闭本任务浏览器。源码功能已验证，未重新打包现有安装版，不宣称已发布；平台 README 说明源码重启/打包入口。临时安装脚本、fixture 和探针读取脚本在本轮收敛清理，不新增报告或保留重复源码副本。
+
+### pnx_platform v1.1.12 发布（2026-10-05）
+
+用户确认发布到仓库 GitHub Release。平台有效基线为 main `4c92f3d` 及上述已有工作区修改；将已验证的 RAM logger 与现有 CSV/watch/烧录改进纳入 1.1.12，版本同步 package、锁文件和三个 Rust crate。Windows 打包脚本接受显式 Electron 缓存 ZIP，并校验版本/平台文件名；不修改系统环境或覆盖旧版本产物。
+
+验证：57 项 Node 回归、71 项 Rust 回归、原生 release 构建 PASS；Windows 便携版独立启动、完整界面交互、安装程序 `/extract:` 后独立启动 PASS。初次打包冒烟失败由测试环境继承 `ELECTRON_RUN_AS_NODE=1` 导致，后续只清除测试进程该变量。完整 UI 测试旧 CSV 断言仍要求 timestamp_ns，而有效默认已改为 sample_index，迁移为严格默认列断言；第二次 UI 运行在拖拽阶段未完成，desktop.log 证实窗口按 30 秒定时退出。测试取消应用端定时退出，改由 runner 的 120 秒上限终止进程，并在 CDP socket 关闭时拒绝未完成请求；完整重测通过，包括 CSV 导出、曲线拖拽、监视项持久化及 32,000 项目录搜索，不放宽产品行为断言。
+
+源码提交 `4ac25b7073d40eb69c0c4e369d61225e93924051` 已推送；本地及远端标签 v1.1.12 均指向该提交。GitHub connector 写入返回 403，改用本机已有 CosmosMount 凭据正常推送，无新增凭据或授权。浏览器发布 [v1.1.12](https://github.com/HKUSTGZ-ROBOMASTER-PNX/pnx_platform/releases/tag/v1.1.12)，Windows Setup、ZIP 和 SHA256SUMS 均上传；API 返回文件体积及 SHA256 与本地产物一致。主分支 CI `37257087886` 在与标签完全同一提交上四平台（Windows x64、Linux x64、macOS Intel/ARM64）全部 PASS；版本标签 CI `37257593806` 首轮 Windows/Linux/macOS ARM64 PASS，但 macOS Intel 侧栏断言 FAIL，诊断重跑仍 FAIL，因此该轮自动 publish 被跳过，不能记为通过。
+
+macOS Intel 首轮日志显示设置 240 px 后初始布局读取仍为 268 px，但移动 70 px 后正确为 310 px；旧断言用过时读数加 60 px 判定，导致实际正确结果失败。测试改为准确检查配置输入 240 + 70 = 310 px，保留真实 renderer pointer 路径；Windows 完整打包 UI 回归 PASS，修正在 main 单独提交 `e54a3b8`，只改测试，不重写已经发布的 v1.1.12 标签或产品代码。
+
+累计复审：原标签诊断重跑仍 FAIL，这次 CSS 已为 310 px 而实际布局仍为 240 px，两个动画帧没有保证异步布局完成；`e54a3b8` 的 macOS Intel 已通过宽度断言，但暂停绘图后的固定 200 ms 窗口没有观察到样本计数增加。测试等待改为有界观察真实初始宽度、拖拽后宽度、首批样本和暂停后后续批次，仍严格检查 240→310、冻结快照不变和采样继续，不跳过或放宽行为断言。单独提交 `e05eca0`，Windows 完整界面回归 PASS；产品及打包源码不变，不重写标签。原标签 CI 两次失败及中间状态保留，不冒充已经通过。
+
+后续 `e05eca0` 的 macOS ARM64 在 hover 可见性断言 FAIL：生产 hover 依赖 `plotGeometry`，原测试仍只等待两个动画帧。改为有界等待首帧几何数据，保留 tooltip 可见、文字与 marker 数量检查；单独提交 `4cc79cc`，Windows 完整界面回归 PASS，新 CI `37259547399` 四平台全部 PASS，测试修正已获多平台证据。所有后续修正相对 v1.1.12 只改变一个既有测试文件。发行附件采用已通过四平台验证且与标签提交完全一致的 `37257087886` 产物；下载前检查提交、CI 和四平台状态，下载后校验 artifact ZIP 和 payload SHA256，调用发布 API 补充附件并校验服务器返回摘要，不修改或删除原附件，凭据仅由现有 Credential Manager 在进程内提供，不打印或落盘。
+
+发行闭合：Windows 安装程序/ZIP、Linux x64 tar.gz、macOS ARM64/Intel DMG 及四份 SHA256SUMS 共九个附件已上传，全部服务器 SHA256 与本地正式产物一致；发行说明同步完整平台清单，Release 为正式已发布状态。标签对应 `4ac25b7`，测试修正后的 main 对应 `4cc79cc`，两个代码状态均有四平台 CI PASS 证据；标签 CI 的失败记录仍保留。
+
+本地正式产物位于平台 `dist/release/v1.1.12/`，保留旧版本。只清理本轮已闭合的具名 smoke 工程/CSV/日志、临时安装解压目录、一次性源码修改/导出/发布助手及其编译缓存；artifact 传输目录由有界临时目录自动释放，保留已有缓存、正式包与 CI 失败诊断。H723 无外设基础断言通过不等于全部功能完善：真实 DMA 传输、看门狗复位、DWT 溢出、长期并发/栈使用及数学向量/矩阵周期比较仍未验证，默认固件已恢复。
