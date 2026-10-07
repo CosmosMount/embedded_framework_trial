@@ -1,4 +1,4 @@
-"""Run from the repository root: python -m unittest discover -s .agents/tests -v."""
+"""Run from the repository root: python -m unittest discover -s tests -v."""
 import json
 from pathlib import Path
 import shutil
@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class ConfigurationTests(unittest.TestCase):

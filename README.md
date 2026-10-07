@@ -16,7 +16,7 @@ PnX 是面向 STM32 与 ThreadX 的可复用下位机模板，包含配置生成
 
 需要 Arm GNU Toolchain、CMake 3.23 或更高版本和 Ninja。选择 `configs/boards/h723_dmmc02/` 或 `configs/boards/f407_cboard/`，按需编辑 `params.json` 与 `robot.json`，再 Configure 和 Build。参数只保留相对默认值的差异，优先级与各文件职责见 [配置入口](configs/README.md)。不要编辑 `build/` 中的生成文件。
 
-H723 与 F407 均有仓库内 BSP 和 Debug/Release preset。支持边界及未验证事项见 [SPEC](.agents/docs/SPEC.md#未决事项)，实际构建证据见任务计划。
+H723 与 F407 均有仓库内 BSP 和 Debug/Release preset。支持边界及未验证事项见 [SPEC](.agents/docs/SPEC.md#未决事项)，实际构建与硬件验收分别执行。
 
 ```powershell
 cmake --preset h723-debug
@@ -40,15 +40,30 @@ F407 使用 `f407-debug` preset。`PNX_BOARD` 自动选择 `bsp/h723_dmmc02/` �
 职责、资源与数据交接见 [DESIGN](.agents/docs/DESIGN.md)，编码、类型、命名与验收统一见 [SPEC](.agents/docs/SPEC.md)。
 
 ```powershell
-python -m unittest discover -s .agents/tests -v
+python -m unittest discover -s tests -v
 git diff --check
 ```
 
-行为回归需要 Python、CMake 和主机 g++。主机测试、ARM 编译链接与实机运行分别验证，不能互相替代。
+行为回归需要 Python、CMake 和主机 g++。正式测试统一在 `tests/`，`.agents/` 下仅 `docs/` 纳入版本控制，其余为本地工作记录。
+
+| 测试入口 | 内容 | 构建 preset |
+| --- | --- | --- |
+| `tests/test_*.py`、`tests/host/` | 配置生成与生产 C++ 的主机回归 | 使用上述 unittest 命令 |
+| `tests/target/core.cpp` | H723/F407 基础实机自测，运行真实 ThreadX 与生产库 | `h723-core-test`、`f407-core-test` |
+| `tests/target/usart.cpp` | H723 USART1 DMA 收发验证 | `h723-usart-test` |
+
+例如构建基础测试固件：
+
+```powershell
+cmake --preset h723-core-test
+cmake --build --preset h723-core-test
+```
+
+这是测试固件，不是完整机器人业务 demo；测试 preset 替换该次构建的应用入口，普通 Debug/Release 固件仍使用 `app/app.cpp`。上述命令只构建，不烧录。运行与恢复固件的命令、串口接线及前置条件见 [实机验证入口](.agents/docs/SPEC.md#验证入口)。主机测试、ARM 编译链接与实机运行分别验证，不能互相替代。
 
 ## 基础日志
 
-`logging::write()` 写入固定 32 字节记录，不分配内存、不格式化字符串、不等待互斥锁。容量和最低等级由 configs 的 `logging` 参数生成。日志位于 `.noinit` RAM，软件或看门狗复位后可保留，断电后不可保留；调试器可直接查看 `pnx_log_records`、`pnx_log_next_sequence` 和 `pnx_log_boot_count`。日志用于补充故障现场，调用方仍须处理函数返回状态。
+`logging::write()` 写入固定 32 字节记录，不分配内存、不格式化字符串、不等待互斥锁。容量和最低等级由 configs 的 `logging` 参数生成。日志位于 `.noinit` RAM，已验证软件复位后保留，断电后不可保留；调试器可直接查看 `pnx_log_records`、`pnx_log_next_sequence` 和 `pnx_log_boot_count`。日志用于补充故障现场，调用方仍须处理函数返回状态。
 
 当前已记录启动、AHRS 初始化/读数状态转换和 CAN 重启结果。运行时日志不执行 Flash 编程或擦除，调用次数不消耗 Flash 擦写寿命；烧录固件会擦写 Flash。需要断电保存时须另行设计持久化策略，不能直接把高频日志写入 Flash。H723 无外设测试与软复位检查见 [验证入口](.agents/docs/SPEC.md#验证入口)。
 

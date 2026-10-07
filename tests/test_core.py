@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class CoreTests(unittest.TestCase):
@@ -36,10 +36,10 @@ class CoreTests(unittest.TestCase):
         if generation.returncode:
             raise RuntimeError(generation.stdout + generation.stderr)
         cls.executable = root / "core_tests.exe"
-        includes = [ROOT / ".agents/tests/host", root / "generated"]
+        includes = [ROOT / "tests/host", root / "generated"]
         for tree in ("libs", "bsp/h723_dmmc02", "bsp/shared", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
-        sources = [ROOT / ".agents/tests/host/test_core.cpp", ROOT / "libs/control/src/pid.cpp",
+        sources = [ROOT / "tests/host/test_core.cpp", ROOT / "libs/control/src/pid.cpp",
                    ROOT / "libs/math/src/constrain.cpp",
                    ROOT / "devices/motors/motor/src/motorhandler.cpp"]
         for family in ("dji", "lk", "dm", "xv2"):
@@ -58,14 +58,14 @@ class CoreTests(unittest.TestCase):
 
     def test_bmi088_transactions_and_duration_stats(self):
         root = Path(self.temp.name).resolve()
-        includes = [ROOT / ".agents/tests/host", root / "generated"]
+        includes = [ROOT / "tests/host", root / "generated"]
         for tree in ("libs", "bsp/h723_dmmc02", "bsp/shared", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
         binary = root / "bmi088.exe"
         command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror", "-mno-ms-bitfields"]
         command.extend(f"-I{path}" for path in includes)
         command.extend(str(ROOT / path) for path in (
-            ".agents/tests/host/test_bmi088.cpp", "devices/imu/bmi088/src/bmi088.cpp"))
+            "tests/host/test_bmi088.cpp", "devices/imu/bmi088/src/bmi088.cpp"))
         command.extend(["-o", str(binary)])
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -74,7 +74,7 @@ class CoreTests(unittest.TestCase):
 
     def compile_and_run_device(self, name, *sources):
         root = Path(self.temp.name).resolve()
-        includes = [ROOT / ".agents/tests/host", root / "generated"]
+        includes = [ROOT / "tests/host", root / "generated"]
         for tree in ("libs", "bsp/h723_dmmc02", "bsp/shared", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
         if name == "dmimu":
@@ -92,7 +92,7 @@ class CoreTests(unittest.TestCase):
         command.extend(f"-I{path}" for path in includes)
         if name in ("remotes", "dmimu", "referee"):
             command.append("-DPNX_TEST_THREAD_ENTRY")
-        command.append(str(ROOT / f".agents/tests/host/test_{name}.cpp"))
+        command.append(str(ROOT / f"tests/host/test_{name}.cpp"))
         command.extend(str(ROOT / source) for source in sources)
         command.append("-mno-ms-bitfields")
         command.extend(["-o", str(binary)])
@@ -136,14 +136,14 @@ class CoreTests(unittest.TestCase):
         root = Path(self.temp.name).resolve()
         for cache_present in (0, 1):
             with self.subTest(cache_present=cache_present):
-                includes = [ROOT / ".agents/tests/host", root / "generated", ROOT / "libs/common/include",
+                includes = [ROOT / "tests/host", root / "generated", ROOT / "libs/common/include",
                             ROOT / "bsp/shared/spi/include", ROOT / "bsp/shared/spi/src",
                             ROOT / "bsp/shared/bsp/include"]
                 binary = root / f"spi_cache_{cache_present}.exe"
                 command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror",
                            f"-D__DCACHE_PRESENT={cache_present}"]
                 command.extend(f"-I{p}" for p in includes)
-                command.extend([str(ROOT / ".agents/tests/host/test_spi.cpp"),
+                command.extend([str(ROOT / "tests/host/test_spi.cpp"),
                                 str(ROOT / "bsp/shared/spi/src/bsp_spi.cpp"), "-o", str(binary)])
                 result = subprocess.run(command, text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -169,7 +169,7 @@ class CoreTests(unittest.TestCase):
             "-P", str(ROOT / "configs/cmake/generate_config.cmake"),
         ], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        includes = [ROOT / ".agents/tests/host", root / "generated"]
+        includes = [ROOT / "tests/host", root / "generated"]
         for tree in ("libs", "bsp/h723_dmmc02", "bsp/shared", "devices", "modules"):
             includes.extend(sorted(p for p in (ROOT / tree).rglob("include") if p.is_dir()))
         binary = root / "gamepad.exe"
@@ -177,7 +177,7 @@ class CoreTests(unittest.TestCase):
                    "-mno-ms-bitfields", "-DPNX_TEST_THREAD_ENTRY"]
         command.extend(f"-I{path}" for path in includes)
         command.extend(str(ROOT / path) for path in (
-            ".agents/tests/host/test_gamepad.cpp", "modules/remoter/src/gamepad.cpp",
+            "tests/host/test_gamepad.cpp", "modules/remoter/src/gamepad.cpp",
             "devices/remotes/src/ps2.cpp"))
         command.extend(["-o", str(binary)])
         result = subprocess.run(command, text=True, capture_output=True)
@@ -189,13 +189,13 @@ class CoreTests(unittest.TestCase):
 
     def test_usart_receive_ownership(self):
         root = Path(self.temp.name).resolve()
-        includes = [ROOT / ".agents/tests/host", root / "generated",
+        includes = [ROOT / "tests/host", root / "generated",
                     ROOT / "libs/common/include", ROOT / "bsp/shared/bsp/include",
                     ROOT / "bsp/shared/usart/include", ROOT / "bsp/shared/usart/src"]
         binary = root / "usart.exe"
         command = [shutil.which("g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror"]
         command.extend(f"-I{path}" for path in includes)
-        command.extend([str(ROOT / ".agents/tests/host/test_usart.cpp"),
+        command.extend([str(ROOT / "tests/host/test_usart.cpp"),
                         str(ROOT / "bsp/shared/usart/src/bsp_usart.cpp"), "-o", str(binary)])
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -215,7 +215,7 @@ class CoreTests(unittest.TestCase):
         command.extend(f"-I{ROOT / path}" for path in (
             "libs/math/include", "libs/filter/include", "modules/ahrs/include", "modules/ahrs/tactical", "cmsis-dsp/Include"))
         command.extend(str(ROOT / path) for path in (
-            ".agents/tests/host/test_ahrs.cpp", "modules/ahrs/tactical/tactical_fusion.cpp",
+            "tests/host/test_ahrs.cpp", "modules/ahrs/tactical/tactical_fusion.cpp",
             "libs/math/src/constrain.cpp", "cmsis-dsp/Source/BasicMathFunctions/arm_dot_prod_f32.c"))
         command.extend(str(path) for path in sorted((ROOT / "cmsis-dsp/Source/MatrixFunctions").glob("*.c")))
         command.extend(["-o", str(binary)])
@@ -252,13 +252,13 @@ class BxCanTests(unittest.TestCase):
                 f"-DOUT_DIR={root}/generated", "-P", str(ROOT / "configs/cmake/generate_config.cmake"),
             ], text=True, capture_output=True)
             self.assertEqual(generation.returncode, 0, generation.stdout + generation.stderr)
-            includes = [ROOT / ".agents/tests/host", root / "generated",
+            includes = [ROOT / "tests/host", root / "generated",
                         ROOT / "libs/common/include", ROOT / "bsp/shared/can/include",
                         ROOT / "bsp/f407_cboard/can/src", ROOT / "libs/log/include"]
             command = [compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror"]
             command.extend(f"-I{path}" for path in includes)
             binary = root / "bxcan.exe"
-            command.extend([str(ROOT / ".agents/tests/host/test_bxcan.cpp"),
+            command.extend([str(ROOT / "tests/host/test_bxcan.cpp"),
                             str(ROOT / "bsp/f407_cboard/can/src/bsp_can.cpp"),
                             str(ROOT / "libs/log/src/log.cpp"), "-o", str(binary)])
             result = subprocess.run(command, text=True, capture_output=True)

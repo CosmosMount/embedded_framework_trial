@@ -39,6 +39,41 @@
         "CMAKE_BUILD_TYPE": "Release",
         "PNX_BOARD": "f407_cboard"
       }
+    },
+    {
+      "name": "target-test",
+      "hidden": true,
+      "inherits": "default",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-Os -g -DNDEBUG",
+        "CMAKE_CXX_FLAGS_RELEASE": "-Os -g -DNDEBUG",
+        "CMAKE_PROJECT_pnx_embedded_INCLUDE": "${sourceDir}/tests/target/inject.cmake"
+      }
+    },
+    {
+      "name": "h723-core-test",
+      "inherits": "target-test",
+      "cacheVariables": {
+        "PNX_BOARD": "h723_dmmc02",
+        "PNX_TARGET_TEST_SOURCE": "${sourceDir}/tests/target/core.cpp"
+      }
+    },
+    {
+      "name": "f407-core-test",
+      "inherits": "target-test",
+      "cacheVariables": {
+        "PNX_BOARD": "f407_cboard",
+        "PNX_TARGET_TEST_SOURCE": "${sourceDir}/tests/target/core.cpp"
+      }
+    },
+    {
+      "name": "h723-usart-test",
+      "inherits": "target-test",
+      "cacheVariables": {
+        "PNX_BOARD": "h723_dmmc02",
+        "PNX_TARGET_TEST_SOURCE": "${sourceDir}/tests/target/usart.cpp"
+      }
     }
   ],
   "buildPresets": [
@@ -57,6 +92,18 @@
     {
       "name": "f407-release",
       "configurePreset": "f407-release"
+    },
+    {
+      "name": "h723-core-test",
+      "configurePreset": "h723-core-test"
+    },
+    {
+      "name": "f407-core-test",
+      "configurePreset": "f407-core-test"
+    },
+    {
+      "name": "h723-usart-test",
+      "configurePreset": "h723-usart-test"
     }
   ],
   "cmakeMinimumRequired": {
