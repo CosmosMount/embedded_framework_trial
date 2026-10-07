@@ -1,6 +1,6 @@
 # PnX 项目需求与验收
 
-适用仓库：Penix。本文维护项目约束与验收；实现机制见 [DESIGN](DESIGN.md)，执行证据见任务计划。源码现状不等于已验证能力。
+适用仓库：Penix。本文维护项目约束与验收；实现机制见 [DESIGN](DESIGN.md)，可复用测试见仓库根 tests/，本地任务记录不作为文档依赖。源码现状不等于已验证能力。
 
 ## 目标与范围
 
@@ -56,28 +56,42 @@
 | `cmake --build --preset h723-debug` | Configure 成功；成功链接对应构建目录的 `pnx_embedded.elf` |
 | `cmake --preset f407-debug` | 完整 F407 生成工程和仓库内 bsp/f407_cboard；自动选板 |
 | `cmake --build --preset f407-debug` | F407 Configure 成功；成功链接对应 ELF |
-| `python -m unittest discover -s .agents/tests -v` | 配置生成与自有库、驱动、模块的生产路径主机回归；需要 Python 3.9+、CMake 和主机 g++，缺 g++ 的跳过不能计为通过 |
+| `python -m unittest discover -s tests -v` | 配置生成与自有库、驱动、模块的生产路径主机回归；需要 Python 3.9+、CMake 和主机 g++，缺 g++ 的跳过不能计为通过 |
 | `git diff --check` | 受跟踪修改无空白错误，不替代行为测试 |
 | 目标硬件检查 | 须获硬件操作授权；H723 无外接设备的基础测试见下文，外设通信与产品指标另行验收 |
 
 Release 使用同板型的 `*-release` preset。根工程未注册 CTest 测试，空测试集不能作为回归通过证据。
 
-H723 基础实机测试使用 [.agents/tests/target/core.cpp](../tests/target/core.cpp) 替换该次构建的应用入口，运行真实 ThreadX 和生产库；正常构建不加载测试。覆盖数学/矩阵、PID、滤波、CRC、回调、latest 消息与线程锁竞争、DWT、DMA 缓冲地址校验、RAM 日志及两套 EKF 的合成输入。DMA 地址校验不等于 DMA 外设传输，协议主机回归不等于总线通信；未覆盖的硬件行为不得由此推导通过。
+H723 与 F407 基础实机测试共用 [tests/target/core.cpp](../../tests/target/core.cpp) 替换该次构建的应用入口，运行真实 ThreadX 和生产库；正常构建不加载测试。覆盖数学/矩阵、PID、滤波、CRC、回调、latest 消息与线程锁竞争、DWT、DMA 缓冲地址校验、RAM 日志及两套 EKF 的合成输入。runner 另检查测试完成后和恢复固件中的 HAL/ThreadX 空闲时钟递增，并验证暂停/继续和软复位日志保留。DMA 地址校验不等于 DMA 外设传输，协议主机回归不等于总线通信；未覆盖的硬件行为不得由此推导通过。
 
 在仓库根目录配置和构建独立测试固件（PowerShell）：
 
 ```powershell
-cmake -S . -B build/h723-core-test -G Ninja -DPNX_BOARD=h723_dmmc02 -DCMAKE_BUILD_TYPE=Release '-DCMAKE_C_FLAGS_RELEASE=-Os -g -DNDEBUG' '-DCMAKE_CXX_FLAGS_RELEASE=-Os -g -DNDEBUG' "-DCMAKE_PROJECT_pnx_embedded_INCLUDE=$((Resolve-Path .agents/tests/target/inject.cmake).Path)"
-cmake --build build/h723-core-test
+cmake --preset h723-core-test
+cmake --build --preset h723-core-test
 ```
 
 确认上述构建及默认 `h723-debug` 构建成功后，通过已安装的 pnx_platform 应用后端和指定 ST-Link 执行：
 
 ```powershell
-node .agents/tests/target/run.mjs --elf build/h723-core-test/pnx_embedded.elf --restore build/h723-debug/pnx_embedded.elf --platform ../pnx_platform/pnx_platform --probe '实际探针序列号'
+node tests/target/run.mjs --elf build/h723-core-test/pnx_embedded.elf --restore build/h723-debug/pnx_embedded.elf --platform ../pnx_platform/pnx_platform --probe '实际探针序列号'
 ```
 
-此命令会烧录测试固件、运行并检查断言、软复位检查日志保留，然后烧录并运行 `--restore` 指定固件；两次烧录都会擦写 Flash。脚本按 ELF 符号定位结果，断言或保留验证失败返回非零；恢复失败同样报错，须处理后再交付设备。恢复镜像来自指定构建，不是自动备份板上原有固件。F407 实机、看门狗复位、断电及外设通信尚需分别验证。
+F407 使用 `f407-core-test` configure/build preset，运行目录改为 `build/f407-core-test`，默认构建与恢复镜像使用 `f407-debug`。runner 从构建缓存选择芯片，烧录前检查设备 ID 与恢复板型，不自动选择其他探针。
+
+此命令会烧录测试固件、运行并检查断言、软复位检查日志保留，然后烧录并运行 `--restore` 指定固件；两次烧录都会擦写 Flash。脚本按 ELF 符号定位结果，断言、时基或保留验证失败返回非零；恢复失败同样报错，须处理后再交付设备。恢复镜像来自指定构建，不是自动备份板上原有固件。已有两板基础测试及 H723 USART1 DMA 历史运行记录；本地历史记录不作为新检出的验收证明，当前代码须按上述入口重新验证。断电及其他外设通信尚需分别验证。
+
+两板 HAL 时基 IRQ 优先级为 14，须高于 ThreadX PendSV 的最低优先级 15；否则无就绪线程时，PendSV 空闲循环会阻止 HAL 时基中断执行。H723 使用 TIM23；F407 使用 TIM14，与 TIM8 共用 IRQ。IOC 是配置来源，重新生成须核对 `TICK_INT_PRIORITY`，F407 还需核对 TIM8 MSP 中的共享 IRQ 优先级。
+
+H723 USART1 DMA 测试使用 PA9/TX、PA10/RX、921600/8N1；须确认 ST-Link VCP 或 USB 串口实际连接 USART1 并共地。需要 Python `pyserial`。`h723-usart-test` preset 通过 `PNX_TARGET_TEST_SOURCE` 选择 [tests/target/usart.cpp](../../tests/target/usart.cpp)，保留基础测试默认入口：
+
+```powershell
+cmake --preset h723-usart-test
+cmake --build --preset h723-usart-test
+node tests/target/run.mjs --elf build/h723-usart-test/pnx_embedded.elf --restore build/h723-debug/pnx_embedded.elf --platform ../pnx_platform/pnx_platform --probe '实际探针序列号' --usart-port '实际串口名'
+```
+
+此模式检查真实循环 RX DMA 和普通 TX DMA，在 DCache 开启时逐字节比对短包、缓冲区边界及连续流；检查发送暂存所有权、占用拒绝和十次空闲时停止/重新接收。主机超时为诊断上限，不代表产品延迟保证；此测试不验证停止期间到来的数据、最高吞吐率、长期压力或其他 UART。烧录、MCU 身份校验和恢复约束与基础测试相同。
 
 ## 未决事项
 
@@ -86,9 +100,9 @@ node .agents/tests/target/run.mjs --elf build/h723-core-test/pnx_embedded.elf --
 - 产品 memory.ld 由 configs 拥有，基于用户当前生成布局；H723 保留现有 BSP 要求的 DMA 段契约。软件构建不代替 DMA 可达性与硬件运行验证。
 - 具体机器人业务、性能及硬件验收待定义，不以设备配置替代产品需求。
 
-配置使用说明见 [configs/README.md](../../configs/README.md)，配置实施与验证见 [配置整理计划](../plans/plan_configs_001.md)。
+配置使用说明见 [configs/README.md](../../configs/README.md)。
 
-代码优化记录见 [代码优化计划](../plans/plan_code_quality_001.md)，双板整合证据见 [双板 BSP 计划](../plans/plan_bsp_boards_001.md)。
+主机回归、两板构建与实机运行分别验收，不能用历史本地计划代替当前可复现检查。
 
 ## 分层、单位与调度
 
@@ -134,9 +148,20 @@ node .agents/tests/target/run.mjs --elf build/h723-core-test/pnx_embedded.elf --
 
 公共归属按语义决定，不能仅因多个层引用就放进 libs/common。同一设备族共享的类型与协议归设备族接口；板级内存布局、DMA 放置规则归 BSP；模块只追加调度、来源与发布状态。只有不包含设备/业务/板型知识的共享能力才归通用库。整理时优先并入已有职责明确的接口，避免为了移动类型另造 common/types/helper 文件；迁移后删除旧头和别名，并核对生成配置及所有消费者。
 
+## 外设资料依据与准入
+
+- 每一种 MCU 外设、板载器件、外接设备及其协议版本，都必须有可追溯的配置与实现依据；禁用的可选驱动也必须登记。统一在 [外设资料索引](PERIPHERALS.md) 维护对应关系，关键寄存器、协议字段和换算常量可引用索引条目，不重复维护配置值。
+- 依据须记录厂商、完整型号及适用板卡/固件版本、文档名称与版本/日期、公开来源链接或厂商获取方式、具体章节/页码，以及所支撑的配置和实现位置。不记录个人电脑路径或文件哈希；缺少版本或公开下载地址时明确标注待确认，通过厂商取得匹配资料。
+- MCU 寄存器、时钟、DMA/cache、IRQ 以对应芯片的参考手册、数据手册和勘误为依据；板级接线、电平、反相、供电和加热电路以适用板卡原理图/厂商管脚图为依据；设备命令、反馈、单位、量程、复位和等待时序以对应型号/固件协议为依据。IOC、生成代码、旧实现和通过的 mock 测试描述现状，不能单独证明硬件配置正确。
+- 资料冲突必须记录差异和采用依据，不静默混用不同版本。厂商示例只证明其覆盖的行为；采用勘误、官方示例或实测替代手册条目时保留明确范围及证据。标定值、PID、温控占空比、通信补偿等实验参数须有适用板卡、条件和测量/推导来源，不能假称来自数据手册。
+- 修改或启用外设前，逐项核对引脚/电平、实际时钟与时序、通信格式、ID/DLC/字节序/CRC、量程和轴端单位、DMA 可达性与资源所有权、启动及失败语义。配置工具可检查的静态冲突应纳入生成校验；资料审查、软件回归、IOC 重生成和实机验收分别记录，不能互相替代。
+- 资料缺失或版本不匹配时，标记待核验及受阻能力，不猜测硬件参数、不宣称已支持或验收通过；只阻止依赖该未知事实的启用、变更和验收，不据此自动删除已有能力或改写用户配置。资料索引中“已找到”不等于“实现已验证”。
+
 ## 文档职责
 
-DESIGN 存放项目通用设计，说明职责、依赖、数据流、状态与并发方案；SPEC 存放规则、限制与验收要求；configs 保存实际配置值；现有活动计划记录本次实施和验证。每项约束只在一处完整维护，其余引用；不把设备级整改记录追加成设计规则。
+`.agents/` 下仅 `docs/` 跟踪并提交，其余计划、运行记录和本地状态一律忽略；已跟踪的非 docs 内容须从索引移除，保留需要的本地记录。正式主机回归及目标板自测位于根目录 `tests/`，纳入版本控制。
+
+DESIGN 存放项目通用设计，说明职责、依赖、数据流、状态与并发方案；SPEC 存放规则、限制与验收要求；configs 保存实际配置值；本地活动计划记录本次实施和验证，不作为正式文档的必要依赖。每项约束只在一处完整维护，其余引用；不把设备级整改记录追加成设计规则。
 
 ## 接口与时序约束
 
@@ -147,7 +172,7 @@ DESIGN 存放项目通用设计，说明职责、依赖、数据流、状态与�
 - 异步接收数据的新鲜度以接收时刻判断，排队、解码及重复发布不得刷新数据年龄。分帧读数须限制组装时间，完整快照使用能反映最旧有效组成部分的时间戳；过期工作状态不得与新帧拼接，序号不能因短暂失联而复用。校验与解码失败保留上一有效输出，并由消费者继续检查其年龄。
 - latest 消息通道默认不等待锁；读写竞争返回 busy，失败不消费待处理状态或改写载荷。调用方显式处理跳过/沿用策略；阻塞发布必须显式启用，不作为控制周期的默认行为。
 - 通用操作状态限定为 `ok`、`error`、`not_configured`、`invalid_arg`、`busy`、`not_initialized`、`timeout`。其中 `busy` 统一表示非阻塞调用当前无法取得资源或数据，`invalid_arg` 包含非法参数与非法调用上下文；协议或设备的专有状态由其自身类型表达，不继续扩张通用枚举。查询与纯计算直接返回值。不会失败的赋值、状态重置和纯副作用操作允许 void，不添加永远返回 `ok` 的分支。HAL/ThreadX 固定 void 回调必须保留框架签名，通过状态或计数报告失败，不增加永远返回 `ok` 的适配层。
-- 日志只补充无法由调用者及时观察的故障和状态转换，不替代返回状态、设备快照或产品保护。记录必须定长、有界、无动态分配且不等待锁；高频采样和每周期成功路径不得写日志。日志满时覆盖最旧记录，不得阻塞控制周期。当前记录、清空及复位保留只操作 RAM，不接入 Flash 擦写。断电持久化须有独立需求、擦写预算与失败语义。保留 RAM 日志只能声明跨软件/看门狗复位保留，不能声明断电保存；调试器下载、复位方式和启动代码是否清 RAM 仍须按工具链验证。
+- 日志只补充无法由调用者及时观察的故障和状态转换，不替代返回状态、设备快照或产品保护。记录必须定长、有界、无动态分配且不等待锁；高频采样和每周期成功路径不得写日志。日志满时覆盖最旧记录，不得阻塞控制周期。当前记录、清空及复位保留只操作 RAM，不接入 Flash 擦写。断电持久化须有独立需求、擦写预算与失败语义。保留 RAM 日志当前只验证了跨软件复位保留，不能声明其他复位方式已验证或断电保存；调试器下载、复位方式和启动代码是否清 RAM 仍须按工具链验证。
 - 不把未在当前产品启用的驱动判定为幽灵；检查生成配置、公开接口、回调和可选构建后再退役。通用模板应以真实第二个实现共享语义，不能为未知硬件预置空基类。
 
 同类设备的归属以职责决定，不以同步轮询或异步传输方式区分层级。遥控器的协议解码和设备读数统一归 devices/remotes；模块只负责调度、缓存交接、失联、事件及发布。设备不得依赖模块类型或创建线程；共享数据定义不得依赖具体硬件。
