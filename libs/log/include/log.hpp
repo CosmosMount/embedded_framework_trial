@@ -61,7 +61,7 @@ runtime_state state() noexcept;
 
 // These retained globals are intentionally named and externally visible so a
 // debugger can inspect logs without executing target code. The linker keeps
-// the .noinit section across software and watchdog resets, but not power loss.
+// the .noinit section across software resets, but not power loss.
 extern "C"
 {
 extern logging::record pnx_log_records[params::logging::capacity];

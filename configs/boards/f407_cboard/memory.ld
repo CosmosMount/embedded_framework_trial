@@ -245,7 +245,7 @@ SECTIONS
   PROVIDE( __bss_start = __tbss_start );
   PROVIDE( __bss_size = __bss_end - __bss_start );
 
-  /* Retained debugger log. Preserved across software/watchdog reset. */
+  /* Retained debugger log. Preserved across software reset. */
   .noinit (NOLOAD) : ALIGN(32)
   {
     *(.noinit)
