@@ -1,6 +1,6 @@
-# Penix
+# Embedded Framework
 
-PnX 是面向 STM32 与 ThreadX 的可复用下位机模板，包含配置生成器、BSP、设备、功能模块、通用库和应用入口。具体机器人控制策略由应用实现；当前 `app_start()` 初始化基础日志，尚未启动机器人控制任务。
+面向 STM32 与 ThreadX 的可复用下位机模板，包含配置生成器、BSP、设备、功能模块、通用库和应用入口。具体机器人控制策略由应用实现；当前 `app_start()` 初始化基础日志，尚未启动机器人控制任务。
 
 项目需求与验收见 [.agents/docs/SPEC.md](.agents/docs/SPEC.md)，架构与实现边界见 [.agents/docs/DESIGN.md](.agents/docs/DESIGN.md)，协作规则见 [AGENTS.md](AGENTS.md)。
 
