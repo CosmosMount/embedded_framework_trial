@@ -61,6 +61,20 @@ cmake --build --preset h723-core-test
 
 这是测试固件，不是完整机器人业务 demo；测试 preset 替换该次构建的应用入口，普通 Debug/Release 固件仍使用 `app/app.cpp`。上述命令只构建，不烧录。运行与恢复固件的命令、串口接线及前置条件见 [实机验证入口](.agents/docs/SPEC.md#验证入口)。主机测试、ARM 编译链接与实机运行分别验证，不能互相替代。
 
+### GitHub CI
+
+[CI 工作流](.github/workflows/ci.yml) 在 PR、推送到 main、合并队列及手动触发时运行。使用 Ubuntu 24.04；主机回归使用 Python 3.12，固件使用固定版本的 Arm GNU Toolchain 13.3.Rel1。工具下载校验 SHA-256，GitHub Actions 固定到完整提交 SHA，由 [Dependabot](.github/dependabot.yml) 每周检查更新。
+
+| 检查 | 覆盖 |
+| --- | --- |
+| Host regression | 变更空白、工作流语法、配置生成及生产 C++ 主机回归；零测试或任何跳过均失败 |
+| Firmware (h723 / f407) | 每板 Debug、Release、core-test 的 Configure 与链接；H723 另编译 usart-test |
+| CI | 汇总全部结果，任一作业失败、取消或跳过均失败；建议将此检查设为 main 的必需状态检查 |
+
+两板并行，每板按现有 preset 顺序构建；仅缓存工具链压缩包，并在使用前重新校验，不缓存构建目录。新提交取消同一 PR/分支的旧运行。工作流不按文件路径跳过，文档变更也会产生完整状态检查。成功构建的 ELF、链接 map 保留 7 天，大小写入运行摘要，供审查而不设置未定义的空间阈值。
+
+CI 只验证软件回归和编译链接。实机测试仍按 [SPEC 的验证入口](.agents/docs/SPEC.md#验证入口) 显式执行；CI 不烧录硬件、不自动发布固件。首次 GitHub 运行成功后再启用必需状态检查。
+
 ## 基础日志
 
 `logging::write()` 写入固定 32 字节记录，不分配内存、不格式化字符串、不等待互斥锁。容量和最低等级由 configs 的 `logging` 参数生成。日志位于 `.noinit` RAM，已验证软件复位后保留，断电后不可保留；调试器可直接查看 `pnx_log_records`、`pnx_log_next_sequence` 和 `pnx_log_boot_count`。日志用于补充故障现场，调用方仍须处理函数返回状态。

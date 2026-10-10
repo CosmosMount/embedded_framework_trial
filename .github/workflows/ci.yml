@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  host:
+    name: Host regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Check whitespace in the change
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          if [[ -n "$BASE_SHA" && "$BASE_SHA" != 0000000000000000000000000000000000000000 ]]; then
+            git diff --check "$BASE_SHA" HEAD
+          else
+            git show --format= --check HEAD
+          fi
+      - name: Validate GitHub workflows
+        run: |
+          curl --fail --silent --show-error --location \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/actionlint.tar.gz"
+          printf '%s  %s\n' \
+            8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 \
+            "$RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+      - name: Check host tools and presets
+        run: |
+          python --version
+          cmake --version
+          g++ --version
+          cmake --list-presets
+      - name: Run configuration and production C++ regression
+        shell: python
+        run: |
+          import sys
+          import unittest
+
+          suite = unittest.defaultTestLoader.discover('tests')
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if result.testsRun == 0:
+              sys.exit('No tests were discovered')
+          if result.skipped:
+              sys.exit('Skipped tests are not accepted in CI')
+          sys.exit(0 if result.wasSuccessful() else 1)
+
+  firmware:
+    name: Firmware (${{ matrix.board }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [h723, f407]
+    env:
+      BOARD: ${{ matrix.board }}
+      ARM_TOOLCHAIN_VERSION: 13.3.rel1
+      ARM_TOOLCHAIN_SHA256: 95c011cee430e64dd6087c75c800f04b9c49832cc1000127a92a97f9c8d83af4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Cache verified Arm toolchain archive
+        id: arm-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/arm-toolchain.tar.xz
+          key: arm-gnu-${{ runner.os }}-${{ runner.arch }}-${{ env.ARM_TOOLCHAIN_VERSION }}-${{ env.ARM_TOOLCHAIN_SHA256 }}
+      - name: Download Arm GNU Toolchain
+        if: steps.arm-cache.outputs.cache-hit != 'true'
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://developer.arm.com/-/media/Files/downloads/gnu/$ARM_TOOLCHAIN_VERSION/binrel/arm-gnu-toolchain-$ARM_TOOLCHAIN_VERSION-x86_64-arm-none-eabi.tar.xz" \
+            --output "$RUNNER_TEMP/arm-toolchain.tar.xz"
+      - name: Verify and install Arm GNU Toolchain
+        run: |
+          printf '%s  %s\n' "$ARM_TOOLCHAIN_SHA256" "$RUNNER_TEMP/arm-toolchain.tar.xz" | sha256sum --check
+          tar -xf "$RUNNER_TEMP/arm-toolchain.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/arm-gnu-toolchain-$ARM_TOOLCHAIN_VERSION-x86_64-arm-none-eabi/bin" >> "$GITHUB_PATH"
+      - name: Check build tools
+        run: |
+          arm-none-eabi-gcc --version
+          cmake --version
+          ninja --version
+      - name: Build Debug firmware
+        run: |
+          cmake --preset "$BOARD-debug"
+          cmake --build --preset "$BOARD-debug" --parallel "$(nproc)"
+      - name: Build Release firmware
+        run: |
+          cmake --preset "$BOARD-release"
+          cmake --build --preset "$BOARD-release" --parallel "$(nproc)"
+      - name: Build core test firmware
+        run: |
+          cmake --preset "$BOARD-core-test"
+          cmake --build --preset "$BOARD-core-test" --parallel "$(nproc)"
+      - name: Build H723 USART test firmware
+        if: matrix.board == 'h723'
+        run: |
+          cmake --preset h723-usart-test
+          cmake --build --preset h723-usart-test --parallel "$(nproc)"
+      - name: Report linked firmware sizes
+        run: |
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          arm-none-eabi-size build/"$BOARD"-*/pnx_embedded.elf | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload ELF and link maps
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firmware-${{ matrix.board }}
+          path: |
+            build/${{ matrix.board }}-*/pnx_embedded.elf
+            build/${{ matrix.board }}-*/pnx_embedded.map
+          if-no-files-found: error
+          retention-days: 7
+
+  ci:
+    name: CI
+    if: ${{ always() }}
+    needs: [host, firmware]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every regression and firmware build to pass
+        env:
+          HOST_RESULT: ${{ needs.host.result }}
+          FIRMWARE_RESULT: ${{ needs.firmware.result }}
+        run: |
+          echo "Host regression: $HOST_RESULT"
+          echo "Firmware builds: $FIRMWARE_RESULT"
+          [[ "$HOST_RESULT" == success && "$FIRMWARE_RESULT" == success ]]
